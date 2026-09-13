@@ -78,6 +78,13 @@ export class DatabaseService {
         ON order_events (order_id, created_at);
       `);
 
+      // Each pipeline transition happens once per order; a unique key makes
+      // recordEvent idempotent so a consumer retry cannot duplicate the row.
+      await client.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_order_events_order_type
+        ON order_events (order_id, event_type);
+      `);
+
       await client.query(`
         CREATE TABLE IF NOT EXISTS processed_events (
           event_id VARCHAR(100) PRIMARY KEY,
@@ -151,6 +158,7 @@ export class DatabaseService {
     const query = `
       INSERT INTO order_events (order_id, event_type, topic)
       VALUES ($1, $2, $3)
+      ON CONFLICT (order_id, event_type) DO NOTHING
     `;
     await this.pool.query(query, [orderId, eventType, topic]);
   }
