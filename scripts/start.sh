@@ -5,13 +5,14 @@
 # The machine cannot be measured by Compose itself, so we measure it HERE
 # (before instantiation), derive per-service resource ceilings from the host's
 # RAM and CPU count, write them to .env (which docker compose interpolates into
-# docker-compose.yml), bring the stack up, and launch the memory watchdog in the
-# background so the host can never be driven into a freeze.
+# docker-compose.yml), launch the memory watchdog, and bring the stack up. The
+# watchdog starts BEFORE `up -d` so the host is protected during the memory-
+# heavy pull/build/startup phase, not only afterwards.
 #
 # Usage:
-#   scripts/start.sh              # calibrate + up -d + start watchdog
-#   NO_WATCHDOG=1 scripts/start.sh   # calibrate + up -d, no watchdog
-#   DRY_RUN=1 scripts/start.sh    # print the calibrated .env and exit
+#   scripts/start.sh              # calibrate + watchdog + up -d
+#   NO_WATCHDOG=1 scripts/start.sh   # calibrate + up -d, and stop any watchdog
+#   DRY_RUN=1 scripts/start.sh    # print the calibrated .env and exit (no Docker needed)
 #
 # See docs/07_WATCHDOG.md for the formula and rationale.
 
@@ -22,15 +23,20 @@ cd "$REPO_ROOT"
 
 ENV_FILE="$REPO_ROOT/.env"
 WATCHDOG="$REPO_ROOT/scripts/watchdog.sh"
+PID_FILE="$REPO_ROOT/scripts/.watchdog.pid"
 
 # --- resolve the compose command (v2 plugin vs legacy binary) ----------------
-if docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  COMPOSE=(docker-compose)
-else
-  echo "ERROR: neither 'docker compose' nor 'docker-compose' is available." >&2
-  exit 1
+# Skipped entirely for DRY_RUN so calibration works on a host without Docker.
+COMPOSE=()
+if [ "${DRY_RUN:-0}" != "1" ]; then
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+  else
+    echo "ERROR: neither 'docker compose' nor 'docker-compose' is available." >&2
+    exit 1
+  fi
 fi
 
 # --- measure the host --------------------------------------------------------
@@ -57,7 +63,7 @@ if [ "$BUDGET_MB" -lt 1024 ]; then
   BUDGET_MB=1024
 fi
 
-# Weights: kafka 45%, postgres 20%, app 20%, zookeeper 15%.
+# Weights (mem AND cpu): kafka 45%, postgres 20%, app 20%, zookeeper 15% => 100%.
 KAFKA_MB=$(( BUDGET_MB * 45 / 100 ))
 POSTGRES_MB=$(( BUDGET_MB * 20 / 100 ))
 APP_MB=$(( BUDGET_MB * 20 / 100 ))
@@ -70,11 +76,17 @@ ZK_HEAP_MB=$(( ZK_MB * 40 / 100 ))
 # Node old-space ~= 75% of the app's mem_limit (leaves room for the rest of RSS).
 APP_HEAP_MB=$(( APP_MB * 75 / 100 ))
 
-# CPUs proportional to nproc (same weights), floored so nothing gets 0.
+# Postgres shared_buffers must stay well under its mem_limit or the container is
+# OOM-killed on small hosts. Scale it to ~25% of the Postgres limit (floor 64MB)
+# so it can never exceed the memory the container is allowed.
+PG_SHARED_MB=$(( POSTGRES_MB / 4 ))
+if [ "$PG_SHARED_MB" -lt 64 ]; then PG_SHARED_MB=64; fi
+
+# CPUs proportional to nproc (same weights as memory), floored so nothing gets 0.
 cpus_share() { awk -v n="$NPROC" -v w="$1" 'BEGIN{v=n*w; if(v<0.5)v=0.5; printf "%.1f", v}'; }
-KAFKA_CPUS=$(cpus_share 0.40)
-POSTGRES_CPUS=$(cpus_share 0.25)
-APP_CPUS=$(cpus_share 0.25)
+KAFKA_CPUS=$(cpus_share 0.45)
+POSTGRES_CPUS=$(cpus_share 0.20)
+APP_CPUS=$(cpus_share 0.20)
 ZK_CPUS=$(cpus_share 0.15)
 
 # --- write .env (consumed by docker compose interpolation) -------------------
@@ -87,6 +99,7 @@ KAFKA_CPUS=${KAFKA_CPUS}
 KAFKA_HEAP_OPTS=-Xmx${KAFKA_HEAP_MB}m -Xms$(( KAFKA_HEAP_MB / 2 ))m
 POSTGRES_MEM_LIMIT=${POSTGRES_MB}m
 POSTGRES_CPUS=${POSTGRES_CPUS}
+POSTGRES_SHARED_BUFFERS=${PG_SHARED_MB}MB
 APP_MEM_LIMIT=${APP_MB}m
 APP_CPUS=${APP_CPUS}
 APP_NODE_OPTIONS=--max-old-space-size=${APP_HEAP_MB}
@@ -96,7 +109,7 @@ ZK_HEAP_OPTS=-Xmx${ZK_HEAP_MB}m -Xms$(( ZK_HEAP_MB / 2 ))m
 EOF
 
 echo "Calibrated for ${TOTAL_MB}MB / ${NPROC} CPUs — stack budget ${BUDGET_MB}MB:"
-echo "  kafka=${KAFKA_MB}m/${KAFKA_CPUS}cpu  postgres=${POSTGRES_MB}m/${POSTGRES_CPUS}cpu  app=${APP_MB}m/${APP_CPUS}cpu  zookeeper=${ZK_MB}m/${ZK_CPUS}cpu"
+echo "  kafka=${KAFKA_MB}m/${KAFKA_CPUS}cpu  postgres=${POSTGRES_MB}m/${POSTGRES_CPUS}cpu (shared_buffers=${PG_SHARED_MB}MB)  app=${APP_MB}m/${APP_CPUS}cpu  zookeeper=${ZK_MB}m/${ZK_CPUS}cpu"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   echo "--- .env (dry run, stack not started) ---"
@@ -104,22 +117,35 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
   exit 0
 fi
 
+# --- stop any watchdog left over from a previous run -------------------------
+# Prevents accumulating watchdogs across repeated starts, and ensures
+# NO_WATCHDOG=1 actually leaves no watchdog running.
+stop_existing_watchdog() {
+  if [ -f "$PID_FILE" ]; then
+    local oldpid
+    oldpid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+      echo "Stopping previous watchdog (pid $oldpid)."
+      kill "$oldpid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+}
+
+# --- launch the watchdog BEFORE bringing the stack up ------------------------
+if [ "${NO_WATCHDOG:-0}" = "1" ]; then
+  stop_existing_watchdog
+  echo "Watchdog disabled (NO_WATCHDOG=1). Run '${WATCHDOG}' yourself to enable it."
+elif [ ! -x "$WATCHDOG" ]; then
+  echo "WARNING: $WATCHDOG is missing or not executable; skipping watchdog." >&2
+else
+  stop_existing_watchdog
+  nohup "$WATCHDOG" >"$REPO_ROOT/scripts/watchdog.log" 2>&1 &
+  echo $! > "$PID_FILE"
+  echo "Watchdog running in background (pid $(cat "$PID_FILE")), logging to scripts/watchdog.log."
+  echo "Stop it with: kill \$(cat scripts/.watchdog.pid)"
+fi
+
 # --- bring the stack up ------------------------------------------------------
 echo "Starting stack: ${COMPOSE[*]} up -d"
 "${COMPOSE[@]}" up -d
-
-# --- launch the watchdog -----------------------------------------------------
-if [ "${NO_WATCHDOG:-0}" = "1" ]; then
-  echo "Watchdog NOT started (NO_WATCHDOG=1). Run '${WATCHDOG}' yourself to enable it."
-  exit 0
-fi
-
-if [ ! -x "$WATCHDOG" ]; then
-  echo "WARNING: $WATCHDOG is missing or not executable; skipping watchdog." >&2
-  exit 0
-fi
-
-nohup "$WATCHDOG" >"$REPO_ROOT/scripts/watchdog.log" 2>&1 &
-echo $! > "$REPO_ROOT/scripts/.watchdog.pid"
-echo "Watchdog running in background (pid $(cat "$REPO_ROOT/scripts/.watchdog.pid")), logging to scripts/watchdog.log."
-echo "Stop it with: kill \$(cat scripts/.watchdog.pid)"
