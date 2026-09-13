@@ -20,7 +20,8 @@ become healthy:
 docker compose ps
 ```
 
-The API listens on `http://localhost:3000`. Kafka topics
+The API listens on `http://localhost:3000` (override the host port with
+`APP_PORT=3001 docker compose up` if 3000 is already in use). Kafka topics
 (`orders`, `payments`, `inventory`, `notifications`, `dlq`) are created by the
 app on startup.
 
