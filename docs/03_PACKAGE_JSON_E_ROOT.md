@@ -1,5 +1,7 @@
 # ARQUIVOS ROOT - COPIE E COLE
 
+> ⚠️ **Documento histórico — superado por `src/`.** O código deste guia foi **materializado e corrigido** em `src/` (rodável via `docker compose up --build`; ver [`docs/SETUP.md`](SETUP.md) e [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)). Estes snippets copy-paste são mantidos como referência histórica do plano e **podem conter bugs já corrigidos** no código real — use `src/` como fonte da verdade.
+
 ## 1️⃣ .gitignore
 
 Crie arquivo: `.gitignore`
