@@ -821,7 +821,7 @@ export class OrderService {
 ## ARQUIVO 12: src/services/database.ts
 
 ```typescript
-import { Pool, PoolClient } from 'pg';
+import { Pool } from 'pg';
 import { databaseConfig } from '../config';
 import { Order } from '../types';
 import { logger } from '../utils/logger';
@@ -932,7 +932,7 @@ export class DatabaseService {
   async updateOrderStatus(orderId: string, status: string, metadata?: any): Promise<void> {
     const query = `
       UPDATE orders 
-      SET status = $1, metadata = metadata || $2, updated_at = CURRENT_TIMESTAMP
+      SET status = $1, metadata = COALESCE(metadata, '{}'::jsonb) || $2, updated_at = CURRENT_TIMESTAMP
       WHERE id = $3
     `;
 
