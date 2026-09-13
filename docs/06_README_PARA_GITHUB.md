@@ -1,5 +1,7 @@
 # Event-Driven Kafka Architecture: Production Patterns & Performance Optimization
 
+> ⚠️ **Historical document — superseded by `src/`.** This is a proposed GitHub README template. The runnable code lives in `src/` (`docker compose up --build`; see [`docs/SETUP.md`](SETUP.md) and [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)). Some snippets here may contain bugs already fixed in the real code — treat `src/` as the source of truth.
+
 ## Overview
 
 A production-grade example of building scalable event-driven microservices using Kafka, Node.js, and PostgreSQL.
