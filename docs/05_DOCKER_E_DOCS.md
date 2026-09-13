@@ -26,6 +26,13 @@ CMD ["node", "dist/index.js"]
 
 ## ARQUIVO 2: docker-compose.yml
 
+> **Tetos de recurso (não trave a máquina):** cada serviço tem `mem_limit`,
+> `cpus` e teto de heap, injetados via `${...}` a partir de um `.env` que o
+> `scripts/start.sh` gera medindo o host. Os fallbacks `:-` deixam
+> `docker compose up` rodar sem o script (defaults conservadores pra ~8 GB).
+> Suba com `scripts/start.sh` (calibra + sobe + liga o watchdog). Detalhes,
+> fórmula e o watchdog: **[07_WATCHDOG.md](07_WATCHDOG.md)**.
+
 ```yaml
 version: '3.8'
 
@@ -36,6 +43,9 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_HEAP_OPTS: ${ZK_HEAP_OPTS:--Xmx256m -Xms128m}
+    mem_limit: ${ZK_MEM_LIMIT:-512m}
+    cpus: ${ZK_CPUS:-0.5}
     ports:
       - "2181:2181"
     healthcheck:
@@ -64,6 +74,9 @@ services:
       KAFKA_LOG_RETENTION_HOURS: 168
       KAFKA_LOG_RETENTION_BYTES: 1073741824
       KAFKA_COMPRESSION_TYPE: snappy
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx512m -Xms256m}
+    mem_limit: ${KAFKA_MEM_LIMIT:-1250m}
+    cpus: ${KAFKA_CPUS:-1.5}
     healthcheck:
       test: kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
       interval: 10s
@@ -79,7 +92,9 @@ services:
       POSTGRES_DB: event_driven
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c max_connections=200"
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB} -c max_connections=200"
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    cpus: ${POSTGRES_CPUS:-1.0}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -106,6 +121,9 @@ services:
       KAFKA_BROKER: kafka:29092
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/event_driven
       LOG_LEVEL: info
+      NODE_OPTIONS: ${APP_NODE_OPTIONS:---max-old-space-size=384}
+    mem_limit: ${APP_MEM_LIMIT:-512m}
+    cpus: ${APP_CPUS:-1.0}
     volumes:
       - .:/app
       - /app/node_modules
