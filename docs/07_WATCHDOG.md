@@ -24,17 +24,20 @@ do host e, se ela cair abaixo de um limiar por várias checagens seguidas,
 ## Como rodar
 
 ```bash
-# Calibra ao hardware, escreve .env, sobe a stack e liga o watchdog em background:
+# Calibra ao hardware, escreve .env, liga o watchdog e sobe a stack:
 scripts/start.sh
-# (equivalente a: npm run docker:up)
 ```
+
+> Quando o `package.json` da raiz for materializado (ver a nota sobre o `app`
+> abaixo), vale apontar um script `docker:up` pra `scripts/start.sh`. Hoje esse
+> `package.json` não existe, então rode o script direto.
 
 Variações:
 
 ```bash
-scripts/start.sh              # calibra + up -d + watchdog (padrão)
-NO_WATCHDOG=1 scripts/start.sh   # calibra + up -d, sem watchdog
-DRY_RUN=1 scripts/start.sh    # só imprime o .env calibrado e sai (não sobe nada)
+scripts/start.sh              # calibra + watchdog + up -d (padrão)
+NO_WATCHDOG=1 scripts/start.sh   # calibra + up -d, e encerra qualquer watchdog anterior
+DRY_RUN=1 scripts/start.sh    # só imprime o .env calibrado e sai (não precisa de Docker)
 ```
 
 Parar o watchdog (o `start.sh` salva o PID):
@@ -55,19 +58,23 @@ O `start.sh` lê `MemTotal` (`/proc/meminfo`) e `nproc`, então:
 
 1. **Headroom pro SO** = `max(2GB, 40% do total)` — fica reservado pro sistema.
 2. **Orçamento da stack** = total − headroom.
-3. **Repartição por peso:** Kafka 45%, Postgres 20%, App 20%, Zookeeper 15%.
+3. **Repartição por peso** (memória **e** CPU, somam 100%): Kafka 45%, Postgres
+   20%, App 20%, Zookeeper 15%.
 4. **Heap JVM** (Kafka/ZK) ≈ 40% do teto do container; **Node old-space** ≈ 75%
    do teto do app.
-5. **`cpus`** proporcional ao `nproc` com os mesmos pesos (piso de 0.5).
+5. **`shared_buffers` do Postgres** ≈ 25% do teto do Postgres (piso 64MB), pra
+   nunca exceder a memória permitida ao container (senão ele é OOM-killed em
+   máquinas pequenas).
+6. **`cpus`** proporcional ao `nproc` com os mesmos pesos (piso de 0.5).
 
 Exemplo numa máquina de ~8 GB / 8 CPUs:
 
-| serviço    | mem_limit | cpus | heap        |
-|------------|-----------|------|-------------|
-| kafka      | ~2094m    | 3.2  | -Xmx837m    |
-| postgres   | ~931m     | 2.0  | —           |
-| app        | ~931m     | 2.0  | old-space 698 |
-| zookeeper  | ~698m     | 1.2  | -Xmx279m    |
+| serviço    | mem_limit | cpus | heap / extra          |
+|------------|-----------|------|-----------------------|
+| kafka      | ~2094m    | 3.6  | -Xmx837m              |
+| postgres   | ~931m     | 1.6  | shared_buffers ~232MB |
+| app        | ~931m     | 1.6  | old-space 698         |
+| zookeeper  | ~698m     | 1.2  | -Xmx279m              |
 
 Numa máquina maior os valores sobem automaticamente; numa menor, descem (e o
 script avisa se sobrar pouco).

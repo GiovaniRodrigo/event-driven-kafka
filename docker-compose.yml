@@ -62,7 +62,7 @@ services:
       POSTGRES_DB: event_driven
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c max_connections=200"
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB} -c max_connections=200"
     mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
     cpus: ${POSTGRES_CPUS:-1.0}
     volumes:
