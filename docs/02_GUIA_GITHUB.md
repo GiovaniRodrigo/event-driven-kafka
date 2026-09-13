@@ -56,7 +56,7 @@ code .
 Depois:
 1. Ctrl+N (novo arquivo)
 2. Digite nome: `.gitignore`
-3. Paste conteúdo de `03_PACKAGE_JSON.md`
+3. Paste conteúdo de `03_PACKAGE_JSON_E_ROOT.md`
 4. Ctrl+S (salvar)
 5. **Repita pra cada arquivo**
 
@@ -80,13 +80,13 @@ EOF
 ### Arquivos a Copiar (ordem importante):
 
 **ROOT (7 arquivos):**
-- [ ] `.gitignore` (de 03_PACKAGE_JSON.md)
-- [ ] `package.json` (de 03_PACKAGE_JSON.md)
-- [ ] `tsconfig.json` (de 03_PACKAGE_JSON.md)
-- [ ] `jest.config.js` (de 03_PACKAGE_JSON.md)
-- [ ] `.dockerignore` (de 03_PACKAGE_JSON.md)
-- [ ] `LICENSE` (de 03_PACKAGE_JSON.md)
-- [ ] `.env.example` (de 03_PACKAGE_JSON.md)
+- [ ] `.gitignore` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `package.json` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `tsconfig.json` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `jest.config.js` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `.dockerignore` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `LICENSE` (de 03_PACKAGE_JSON_E_ROOT.md)
+- [ ] `.env.example` (de 03_PACKAGE_JSON_E_ROOT.md)
 
 **SRC (12 arquivos):**
 - [ ] `src/index.ts` (de 04_ARQUIVOS_SRC.md)
@@ -283,4 +283,4 @@ Seu repo está LIVE no GitHub! 🎉
 
 **Tempo total: ~1 hora**
 
-**Próximo arquivo: 03_PACKAGE_JSON.md (para copiar arquivos root)**
+**Próximo arquivo: 03_PACKAGE_JSON_E_ROOT.md (para copiar arquivos root)**

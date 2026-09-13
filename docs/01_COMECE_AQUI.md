@@ -13,7 +13,7 @@ Você tem **4 arquivos principais**:
 ```
 ✅ 01_COMECE_AQUI.md (este arquivo)
 ✅ 02_GUIA_GITHUB.md (instruções passo-a-passo)
-✅ 03_PACKAGE_JSON.md (package.json + dependências)
+✅ 03_PACKAGE_JSON_E_ROOT.md (package.json + dependências)
 ✅ 04_ARQUIVOS_SRC.md (todos os .ts files)
 ✅ 05_DOCKER_E_DOCS.md (Dockerfile + docker-compose)
 ```
@@ -70,7 +70,7 @@ Segue instruções passo-a-passo (muito fácil!)
 
 ### PASSO 3: Copiar Arquivos (1 hora)
 Vá para cada arquivo:
-- `03_PACKAGE_JSON.md` → Copie package.json
+- `03_PACKAGE_JSON_E_ROOT.md` → Copie package.json
 - `04_ARQUIVOS_SRC.md` → Copie todos .ts files
 - `05_DOCKER_E_DOCS.md` → Copie docker files
 
@@ -144,7 +144,7 @@ R: Seguindo o plano sequencial (~28h no total) = repo + article + recruiters = T
 
 1. **Este arquivo** (você está aqui) ✅
 2. **02_GUIA_GITHUB.md** → Passo-a-passo técnico
-3. **03_PACKAGE_JSON.md** → Copie package.json
+3. **03_PACKAGE_JSON_E_ROOT.md** → Copie package.json
 4. **04_ARQUIVOS_SRC.md** → Copie src/ files
 5. **05_DOCKER_E_DOCS.md** → Copie docker + docs
 
