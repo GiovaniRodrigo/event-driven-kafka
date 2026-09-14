@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
+import { useI18n } from '@/i18n';
 import { useOrder } from '@/hooks/use-dashboard-data';
 import { useOrderRealtime } from '@/hooks/use-order-realtime';
 import { ApiError } from '@/lib/api';
@@ -18,6 +19,7 @@ import { formatCurrency, formatTime } from '@/lib/utils';
 /** A single order: summary, line items, and its live event timeline. */
 export function OrderDetail() {
   const { id } = useParams<{ id: string }>();
+  const { t } = useI18n();
   const { data, error, isLoading } = useOrder(id);
   useOrderRealtime(id);
 
@@ -29,7 +31,7 @@ export function OrderDetail() {
         to="/"
         className="inline-flex items-center gap-1.5 text-body text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="size-4" /> Back to overview
+        <ArrowLeft className="size-4" /> {t('order.back')}
       </Link>
 
       {isLoading && !data ? (
@@ -38,37 +40,37 @@ export function OrderDetail() {
           <Skeleton className="h-64" />
         </div>
       ) : notFound ? (
-        <Alert tone="warning" title="Order not found">
-          No order matches id <code className="font-mono">{id}</code>.
+        <Alert tone="warning" title={t('order.notFound')}>
+          {t('order.notFoundBody')} <code className="font-mono">{id}</code>.
         </Alert>
       ) : error ? (
-        <Alert tone="danger" title="Could not load order">
-          The backend is unreachable.
+        <Alert tone="danger" title={t('order.loadError')}>
+          {t('error.backendUnreachable')}
         </Alert>
       ) : data ? (
         <>
           <Card>
             <CardHeader className="flex-row items-start justify-between">
               <div className="space-y-1">
-                <p className="text-caption uppercase tracking-wide text-muted-foreground">Order</p>
+                <p className="text-caption uppercase tracking-wide text-muted-foreground">{t('order.order')}</p>
                 <code className="font-mono text-heading text-surface-foreground">{data.order_id}</code>
                 <p className="text-body text-muted-foreground">
-                  {data.user_id} · created {formatTime(data.created_at)}
+                  {data.user_id} · {t('order.created')} {formatTime(data.created_at)}
                 </p>
               </div>
               <StatusBadge status={data.status} />
             </CardHeader>
             <CardContent className="flex flex-wrap gap-x-8 gap-y-2">
               <div>
-                <p className="text-caption uppercase tracking-wide text-muted-foreground">Total</p>
+                <p className="text-caption uppercase tracking-wide text-muted-foreground">{t('order.total')}</p>
                 <p className="text-heading tabular-nums text-surface-foreground">
                   {formatCurrency(data.total_amount)}
                 </p>
               </div>
               <div className="min-w-[12rem] flex-1">
-                <p className="text-caption uppercase tracking-wide text-muted-foreground">Items</p>
+                <p className="text-caption uppercase tracking-wide text-muted-foreground">{t('order.items')}</p>
                 <ul className="mt-1 space-y-1 text-body">
-                  {data.items.length === 0 && <li className="text-muted-foreground">No items recorded.</li>}
+                  {data.items.length === 0 && <li className="text-muted-foreground">{t('order.noItems')}</li>}
                   {data.items.map((item, i) => (
                     <li key={`${item.sku}-${i}`} className="flex justify-between gap-4">
                       <span className="text-surface-foreground">
@@ -86,7 +88,7 @@ export function OrderDetail() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Event timeline</CardTitle>
+              <CardTitle>{t('order.timeline')}</CardTitle>
             </CardHeader>
             <CardContent>
               <EventTimeline events={data.events} failed={data.status === 'failed'} />

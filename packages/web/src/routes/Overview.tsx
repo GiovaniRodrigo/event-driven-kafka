@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { useI18n } from '@/i18n';
 import { useHealth, useMetrics, useOrders } from '@/hooks/use-dashboard-data';
 import {
   Alert,
@@ -18,6 +19,7 @@ const CONSUMERS = ['payment', 'inventory', 'notification'] as const;
 /** Operational at-a-glance: KPI row, recent orders, consumer health — all live. */
 export function Overview() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const metrics = useMetrics();
   const orders = useOrders();
   const health = useHealth();
@@ -28,15 +30,15 @@ export function Overview() {
         {metrics.isLoading && !metrics.data ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
         ) : metrics.error ? (
-          <Alert tone="danger" title="Metrics unavailable" className="sm:col-span-2 lg:col-span-4">
-            The backend is unreachable.
+          <Alert tone="danger" title={t('error.metrics')} className="sm:col-span-2 lg:col-span-4">
+            {t('error.backendUnreachable')}
           </Alert>
         ) : (
           <>
-            <MetricCard label="Total orders" value={toNumber(metrics.data?.total_orders).toLocaleString()} tone="primary" />
-            <MetricCard label="Completed" value={toNumber(metrics.data?.completed_orders).toLocaleString()} tone="success" />
-            <MetricCard label="Failed" value={toNumber(metrics.data?.failed_orders).toLocaleString()} tone="danger" />
-            <MetricCard label="Avg order value" value={formatCurrency(toNumber(metrics.data?.avg_order_value))} tone="info" />
+            <MetricCard label={t('metric.total')} value={toNumber(metrics.data?.total_orders).toLocaleString()} tone="primary" />
+            <MetricCard label={t('metric.completed')} value={toNumber(metrics.data?.completed_orders).toLocaleString()} tone="success" />
+            <MetricCard label={t('metric.failed')} value={toNumber(metrics.data?.failed_orders).toLocaleString()} tone="danger" />
+            <MetricCard label={t('metric.avg')} value={formatCurrency(toNumber(metrics.data?.avg_order_value))} tone="info" />
           </>
         )}
       </section>
@@ -44,7 +46,7 @@ export function Overview() {
       <section className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Recent orders</CardTitle>
+            <CardTitle>{t('overview.recentOrders')}</CardTitle>
           </CardHeader>
           <CardContent>
             {orders.isLoading && !orders.data ? (
@@ -54,8 +56,8 @@ export function Overview() {
                 ))}
               </div>
             ) : orders.error ? (
-              <Alert tone="danger" title="Orders unavailable">
-                Could not reach the backend. Check that the API is running.
+              <Alert tone="danger" title={t('error.orders')}>
+                {t('error.ordersBody')}
               </Alert>
             ) : (
               <OrdersTable
@@ -68,14 +70,14 @@ export function Overview() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Consumer health</CardTitle>
+            <CardTitle>{t('overview.consumerHealth')}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {health.isLoading && !health.data ? (
               Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-9" />)
             ) : health.error ? (
-              <Alert tone="danger" title="Health unavailable">
-                The backend is unreachable.
+              <Alert tone="danger" title={t('error.health')}>
+                {t('error.backendUnreachable')}
               </Alert>
             ) : (
               CONSUMERS.map((name) => (
