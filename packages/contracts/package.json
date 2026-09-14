@@ -1,0 +1,25 @@
+{
+  "name": "@kafka-demo/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared zod contracts (REST + Socket.IO payloads) for the event-driven Kafka order system.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./src/index.ts",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "^5.1.3"
+  }
+}
