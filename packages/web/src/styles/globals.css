@@ -1,0 +1,90 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Design tokens. Dark-first: the dark palette lives on :root so the observability
+ * aesthetic is the default; `.light` overrides it for the working light theme.
+ * Colors are HSL channels (consumed as `hsl(var(--token))` in tailwind.config).
+ */
+@layer base {
+  :root {
+    --background: 222 24% 8%;
+    --foreground: 210 20% 92%;
+
+    --surface: 222 20% 11%;
+    --surface-foreground: 210 20% 92%;
+    --surface-muted: 222 16% 15%;
+
+    --muted: 222 14% 20%;
+    --muted-foreground: 215 14% 60%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 11%;
+
+    --success: 152 58% 45%;
+    --success-foreground: 152 60% 96%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 38 90% 10%;
+
+    --danger: 0 72% 58%;
+    --danger-foreground: 0 60% 97%;
+
+    --info: 199 89% 55%;
+    --info-foreground: 199 60% 10%;
+
+    --border: 222 16% 20%;
+    --input: 222 16% 22%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.625rem;
+  }
+
+  .light {
+    --background: 210 40% 98%;
+    --foreground: 222 32% 14%;
+
+    --surface: 0 0% 100%;
+    --surface-foreground: 222 32% 14%;
+    --surface-muted: 210 30% 95%;
+
+    --muted: 210 24% 90%;
+    --muted-foreground: 215 16% 42%;
+
+    --primary: 217 91% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    --success: 152 56% 38%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 32 90% 46%;
+    --warning-foreground: 0 0% 100%;
+
+    --danger: 0 72% 50%;
+    --danger-foreground: 0 0% 100%;
+
+    --info: 199 89% 46%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 214 20% 86%;
+    --input: 214 20% 84%;
+    --ring: 217 91% 52%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  /* Visible, consistent keyboard focus across every interactive element. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}

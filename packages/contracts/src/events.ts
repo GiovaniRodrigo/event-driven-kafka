@@ -16,6 +16,7 @@ export const orderStatusSchema = z.enum([
   'completed',
   'failed',
 ]);
+export type OrderStatus = z.infer<typeof orderStatusSchema>;
 
 export const orderSummarySchema = z.object({
   order_id: z.string(),
@@ -39,6 +40,7 @@ export const orderEventPayloadSchema = z.object({
 export type OrderEventPayload = z.infer<typeof orderEventPayloadSchema>;
 
 export const consumerHealthSchema = z.enum(['healthy', 'degraded', 'down']);
+export type ConsumerHealth = z.infer<typeof consumerHealthSchema>;
 
 export const consumerHealthMapSchema = z.object({
   payment: consumerHealthSchema,
