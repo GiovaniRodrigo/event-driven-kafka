@@ -5,7 +5,7 @@ import {
   OrderEventPayload,
   ConsumerHealthMap,
   SOCKET_EVENTS,
-} from '../contracts/events';
+} from '@kafka-demo/contracts';
 import { logger } from '../utils/logger';
 
 /**

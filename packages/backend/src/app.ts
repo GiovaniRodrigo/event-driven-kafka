@@ -1,6 +1,6 @@
 import express, { Express, Request, Response } from 'express';
 import { Order, OrderEvent, OrderItem } from './types';
-import { ConsumerHealthMap } from './contracts/events';
+import { ConsumerHealthMap } from '@kafka-demo/contracts';
 import { logger } from './utils/logger';
 
 /** Read model the HTTP routes need — a narrow view of DatabaseService. */

@@ -10,7 +10,7 @@ import { NotificationConsumer } from './consumers/notification-consumer';
 import { DatabaseService } from './services/database';
 import { SocketRealtimeGateway } from './realtime/realtime-gateway';
 import { RealtimeConsumer } from './realtime/realtime-consumer';
-import { ConsumerHealthMap } from './contracts/events';
+import { ConsumerHealthMap } from '@kafka-demo/contracts';
 import { kafkaConfig, topics } from './config';
 import { logger } from './utils/logger';
 
