@@ -19,5 +19,14 @@ export {
   SelectItem,
 } from './select';
 export { Skeleton } from './skeleton';
+export {
+  Dialog,
+  DialogTrigger,
+  DialogClose,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from './dialog';
 export { ToastProvider, useToast } from './toast';
 export type { ToastTone } from './toast';
