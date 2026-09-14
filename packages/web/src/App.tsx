@@ -1,10 +1,11 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, type RouteObject } from 'react-router-dom';
 import { AppLayout } from '@/routes/AppLayout';
 import { Overview } from '@/routes/Overview';
 import { OrderDetail } from '@/routes/OrderDetail';
 import { Consumers } from '@/routes/Consumers';
 
-const router = createBrowserRouter([
+/** Route table, exported so tests can mount it with a memory router. */
+export const routes: RouteObject[] = [
   {
     element: <AppLayout />,
     children: [
@@ -13,7 +14,9 @@ const router = createBrowserRouter([
       { path: '/consumers', element: <Consumers /> },
     ],
   },
-]);
+];
+
+const router = createBrowserRouter(routes);
 
 export function App() {
   return <RouterProvider router={router} />;
