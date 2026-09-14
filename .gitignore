@@ -6,6 +6,7 @@ yarn.lock
 dist/
 build/
 *.tsbuildinfo
+storybook-static/
 
 # Logs
 logs/
