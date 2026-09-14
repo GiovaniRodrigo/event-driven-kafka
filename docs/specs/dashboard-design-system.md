@@ -18,7 +18,7 @@ Two coordinated tracks in this repo:
 
 1. **Materialize the backend.** Move the code out of `docs/` into a runnable `src/` service (Node/Express/TypeScript + Kafka + PostgreSQL), refactoring for quality as it moves (module structure, typing, bug fixes), and add the read-side surface the UI needs (an orders list endpoint, per-order event history, per-consumer health, and a real-time event stream). The backend also runs a dedicated read-side Kafka consumer that bridges pipeline events to a WebSocket broadcast.
 
-2. **Build the design system (the star) + a live dashboard.** Reimplement a component library from scratch (Vite + React + TypeScript on shadcn/ui + Radix + Tailwind), using the v0-generated output only as a visual reference. The design system is documented as living documentation in a hosted **Storybook**, and is exercised for real by a small multi-view dashboard that connects to the materialized backend over REST (SWR) plus a Socket.IO real-time layer. A shared, zod-based `contracts` package gives both sides a single, runtime-validated definition of every payload.
+2. **Build the design system (the star) + a live dashboard.** Reimplement a component library from scratch (Vite + React + TypeScript on shadcn/ui + Radix + Tailwind), **faithfully reproducing the v0-generated design** — its app shell (left sidebar + operations top bar), screens, navigation, and features are the UI target; only v0's *code* is not adopted (it is rebuilt on this stack). The design system is documented as living documentation in a hosted **Storybook**, and is exercised for real by a multi-view, **bilingual (PT/EN)** dashboard that connects to the materialized backend over REST (SWR) plus a Socket.IO real-time layer. A shared, zod-based `contracts` package gives both sides a single, runtime-validated definition of every payload.
 
 The result: a repo you can clone and `docker-compose up`, a public Storybook link for the design system, and a live dashboard that visibly shows orders moving through the Kafka pipeline.
 
@@ -69,6 +69,19 @@ The result: a repo you can clone and `docker-compose up`, a public Storybook lin
 34. As a developer, I want the repo organized as pnpm workspaces (backend, web app, contracts), so that types are shared type-safely without duplication or heavy monorepo tooling.
 35. As the project owner, I want the README to explain and link the running system and the hosted Storybook, so that a visitor knows what exists and how to run it.
 
+### App shell & internationalization (faithful to v0)
+36. As an operator, I want the dashboard framed by a persistent **left sidebar** ("Order platform" workspace + primary navigation) alongside the top bar — not a top bar alone — so the shell matches the v0 layout and scales to more views.
+37. As an operator, I want the top bar to carry the operational context the v0 shows — the **"Streamline / Kafka operations"** identity, an **environment badge** (e.g. `produção · us-east-1 / cluster-a`), a **search** entry point, a **profile** control, and the live-connection indicator — so the tool reads as a real operations console.
+38. As a user, I want the entire interface available in **Portuguese and English** via an in-header language toggle that switches instantly without reload (nav, titles, descriptions, actions, labels, and `aria-label`s all translated), so the dashboard serves both audiences exactly as v0 does.
+39. As an operator, I want the order flow to open the **orders list first and drill into a detail view via a breadcrumb** (list ⇄ detail), so navigation mirrors the v0 flow and the current view is always clear.
+
+### Dashboard depth (faithful to v0)
+40. As an operator, I want a **request/event map** view that visualizes requests across regions with routed connections, per-region volume, a live indicator, total requests and average latency, and a legend, so the flow of traffic is visible at a glance as in v0.
+41. As an operator, I want each **node in the map to be selectable** (clickable and via a region dropdown), highlighting the selection and updating a detail panel with method, endpoint, origin, destination, status, latency, timestamp, and correlation id, so I can inspect an individual request as in v0.
+42. As an operator, I want an **AI analysis** field on the order-detail view showing an automatic summary of the order's events with a confidence indicator and a visual confidence bar (read-only, translated, accessible), so I get a plain-language read on each order as in v0.
+43. As an operator, I want the order detail to expose the **raw event payload as formatted JSON**, so I can inspect the exact message that moved through the pipeline, matching v0.
+44. As an operator, I want the metric surface to include **throughput, consumer lag, and an event-flow view** (not only aggregate counts), each MetricCard carrying a value, delta, and trend sparkline, so operational direction is visible as in v0.
+
 ## Implementation Decisions
 
 **Repository structure**
@@ -83,10 +96,17 @@ The result: a repo you can clone and `docker-compose up`, a public Storybook lin
 
 **Frontend**
 - **Vite + React + TypeScript** SPA (no Next.js; the backend is the only server). **react-router-dom** for the multi-view routing.
-- Component library reimplemented from scratch on **shadcn/ui (Radix + Tailwind)**; the v0 output (`v0.app/giovanirodrigos-projects/chat/design-system-kafka-order-dashboard-mBDo5NwtERV`) is visual reference only, not adopted code.
+- Component library reimplemented from scratch on **shadcn/ui (Radix + Tailwind)**. The v0 design (`v0.app/giovanirodrigos-projects/chat/design-system-kafka-order-dashboard-mBDo5NwtERV`) is the **UI source of truth, reproduced faithfully** — its layout, app shell, screens, and features are the target; only v0's *code* is not adopted (rebuilt on this stack instead of importing v0's Next.js output).
+- **App shell (faithful to v0):** a persistent **left sidebar** ("Order platform" workspace + primary navigation) plus a top bar carrying the **"Streamline / Kafka operations"** identity, an **environment badge** (`produção · us-east-1 / cluster-a`), **search**, **profile**, the **language toggle**, and the live-connection indicator.
+- **Internationalization:** **Portuguese + English**, toggled in-header and switching instantly without reload; every user-facing string and `aria-label` is translated. Lightweight in-app i18n (no server, no persistence beyond the session).
 - **Design tokens** as CSS variables / Tailwind theme; dark-first with a working light theme.
 - **Data layer:** **SWR** for REST reads; the Socket.IO subscription patches the SWR cache on incoming messages via `mutate(key, updater, { revalidate: false })`, so the SWR cache is the single source of truth and real-time only updates it.
-- **Dashboard surface (multi-view):** an **Overview** page (MetricCards row + OrdersTable + consumer HealthPill panel), an **order-detail** route (EventTimeline for the selected order, live via its room), and a **consumers/health** route. A create-order form triggers the pipeline for demos.
+- **Dashboard surface (faithful to v0, multi-view):**
+  - **Overview** — MetricCards (value + delta + trend sparkline, including throughput and consumer lag), OrdersTable, consumer HealthPill panel, and the **request/event map**.
+  - **Orders** — the **list first**, drilling into an **order detail** via a breadcrumb; the detail shows the summary, line items, the **EventTimeline** (live via its per-order room), the **AI analysis** field (summary + confidence + visual bar), and the **raw JSON payload**.
+  - **Consumers/health** — per-consumer HealthPill board with healthy/degraded/down states.
+  - **Request map** — region view with routed connections, per-region volume, live indicator, totals + average latency, and a legend; **selectable nodes** (click or region dropdown) whose detail panel shows method, endpoint, origin, destination, status, latency, timestamp, and correlation id.
+  - A **create-order** form triggers the pipeline for demos.
 
 **Documentation**
 - The design system's living documentation is **Storybook 8 (Vite builder)**, hosted on **GitHub Pages via GitHub Actions on push to `main`**. Storybook renders themed. There is no separate hand-built style-guide page.
@@ -104,17 +124,19 @@ The result: a repo you can clone and `docker-compose up`, a public Storybook lin
 
 - Deploying the full application (API, Kafka, PostgreSQL, web app) to a hosted environment — it runs locally via `docker-compose`; only Storybook is publicly hosted.
 - Authentication / authorization and multi-tenant access control.
-- A metrics/time-series backend (Prometheus-style history); MetricCards render what the API provides, sparklines from available data.
+- A metrics/time-series backend (Prometheus-style history); MetricCards — including throughput, consumer lag, and trend sparklines — render from what the API provides plus derived/representative values where a historical series is unavailable.
+- A geospatial/telemetry backend for the **request map** (regions, routes, per-request correlation-id latency) and a real ML service behind the **AI-analysis** field; where the materialized backend does not expose this data, these views render from derived/representative data client-side, reproducing the v0 visuals without adding new backend infrastructure.
 - Re-architecting the Kafka topology or the business logic of the payment/inventory/notification consumers (beyond the read-side consumer and the new read endpoints), and any persistence swap away from PostgreSQL.
 - Editing or cancelling orders from the dashboard (read + create only).
-- Adopting the v0-generated code as source of truth (it is visual reference only).
+- Adopting the v0-generated *code* (its Next.js output). The v0 **design** is the UI source of truth and is reproduced faithfully, but it is reimplemented from scratch on the shadcn/ui stack rather than imported.
 - Persisting UI preferences (theme, filters) beyond a single session.
 - TanStack Router / TanStack Query, SSE, and a hand-built style-guide page — all considered and rejected in favor of react-router-dom, SWR, Socket.IO, and Storybook respectively.
 
 ## Further Notes
 
 - **Design-tree provenance:** the ~20 decisions above were settled interactively (`/grilling`), reversing several initial recommendations — notably reimplement-from-scratch (over adopting v0), connect-to-real-backend (over standalone docs), WebSocket/Socket.IO (over SSE), SWR (over React Query), and Storybook (over a custom style-guide page).
-- **v0 reference:** chat `https://v0.app/giovanirodrigos-projects/chat/design-system-kafka-order-dashboard-mBDo5NwtERV`, preview `https://design-system-kafka-order-dashboard.v0.build` (both require the owner's v0 login).
+- **v0 design (UI source of truth, reproduced faithfully):** chat `mBDo5NwtERV` (`https://v0.app/giovanirodrigos-projects/chat/design-system-kafka-order-dashboard-mBDo5NwtERV`), preview `https://design-system-kafka-order-dashboard.v0.build`. Both require the owner's interactive v0 login in the browser; the chat is also reachable programmatically through the connected **v0 MCP connector** (`listChats`/`getChat`/`getPreview`/`listMessages`), though the connector returns chat metadata and the build log — not the rendered pixels or the generated source, which live in the v0 VM. The v0 build produced these screens the implementation must reproduce: operational **overview** (with the request map), **orders list → order detail**, **consumers/health**, the **AI-analysis** field on the order detail, the **request map** plus its selected-node state, and full **PT/EN** localization. App-shell chrome: left sidebar (WORKSPACE › "Order platform" › primary nav incl. Métricas, Tópicos Kafka) + top bar with the "Streamline / Kafka operations" brand, environment badge, search, profile, and language toggle; footer "Design system v2.4.0".
+- **Design-fidelity revision:** this spec was updated so the v0 design is the **faithful UI target** — adding the sidebar app shell, PT/EN i18n, the request map (with node selection), the AI-analysis field, the JSON payload view, and throughput/lag metrics as first-class requirements (user stories 36–44). The earlier "v0 output is visual reference only" framing is superseded; "reimplement from scratch" still holds for v0's *code*, not its design.
 - **Critical path:** the three new read endpoints plus the Kafka→WS bridge are the dependency that makes the live dashboard truthful; the design system and Storybook can proceed in parallel against mock args.
 - **Repo hygiene:** the git remote is registered as `orign` (typo for `origin`) pointing at `github.com/GiovaniRodrigo/event-driven-kafka` — unrelated to this feature but worth fixing.
 - **Sequencing suggestion (not binding):** (1) workspaces + `contracts` skeleton; (2) materialize backend + new endpoints + read-side bridge; (3) design system + Storybook; (4) wire the multi-view dashboard to REST + Socket.IO; (5) tests at the seams above; (6) README + hosted Storybook.
