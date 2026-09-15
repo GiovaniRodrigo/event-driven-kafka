@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createApp, AppDependencies } from '../../src/app';
+import { createApp, AppDependencies } from '../../../src/app';
 
 function buildDeps(overrides: Partial<AppDependencies> = {}): AppDependencies {
   return {

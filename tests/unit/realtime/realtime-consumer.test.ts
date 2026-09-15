@@ -1,5 +1,5 @@
-import { RealtimeConsumer } from '../../src/realtime/realtime-consumer';
-import { RealtimeGateway } from '../../src/realtime/realtime-gateway';
+import { RealtimeConsumer } from '../../../src/realtime/realtime-consumer';
+import { RealtimeGateway } from '../../../src/realtime/realtime-gateway';
 
 function mockGateway(): jest.Mocked<RealtimeGateway> {
   return {
