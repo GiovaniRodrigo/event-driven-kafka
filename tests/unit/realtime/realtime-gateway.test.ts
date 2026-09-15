@@ -1,4 +1,4 @@
-import { SocketRealtimeGateway } from '../../src/realtime/realtime-gateway';
+import { SocketRealtimeGateway } from '../../../src/realtime/realtime-gateway';
 
 function mockIo() {
   const roomEmit = jest.fn();
