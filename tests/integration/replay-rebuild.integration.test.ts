@@ -75,6 +75,7 @@ describe('Deterministic Replay & Projection Transactionality Integration Tests (
         sequenceNumber: 2,
         payload: {
           order_id: orderId,
+          user_id: 'usr_replay_1',
           payment_id: `pay_${orderId}`,
           amount: 150,
           authorization_code: 'AUTH_REPLAY_1',
@@ -213,7 +214,7 @@ describe('Deterministic Replay & Projection Transactionality Integration Tests (
       correlationId: `corr_${orderId}`,
       causationId: 'evt_1',
       sequenceNumber: 2,
-      payload: { order_id: orderId, payment_id: 'pay_fail', amount: 99 },
+      payload: { order_id: orderId, user_id: 'usr_atom_1', payment_id: 'pay_fail', amount: 99 },
     });
 
     await expect(
