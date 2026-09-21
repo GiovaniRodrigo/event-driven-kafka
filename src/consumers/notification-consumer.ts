@@ -1,63 +1,57 @@
 import { BaseConsumer } from './base-consumer';
-import { NotificationService } from '../services/notification-service';
+import { DatabaseService } from '../services/database';
+import { topics } from '../config';
+import { EventTypes } from '../contracts';
+import { EventEnvelope } from '../contracts/envelope';
+import { ChaosEngine } from '../chaos/chaos-engine';
 import { logger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
-/**
- * Consumes `inventory.reserved` from the `inventory` topic, sends the order
- * confirmation, and marks the order `completed`. This is the final stage of
- * the pipeline.
- */
 export class NotificationConsumer extends BaseConsumer {
-  private notificationService: NotificationService;
+  private chaosEngine: ChaosEngine;
 
-  constructor() {
-    super('inventory', 'notification-processor-group');
-    this.notificationService = new NotificationService(this.db);
+  constructor(dbInstance?: DatabaseService) {
+    super(topics.notifications.name, 'notification-service-group', 'notification-service', dbInstance);
+    this.chaosEngine = ChaosEngine.getInstance();
   }
 
-  protected async processEvent(event: any): Promise<void> {
-    const startTime = Date.now();
+  protected async processEvent(envelope: EventEnvelope): Promise<void> {
+    const { event_type: eventType, aggregate_id: orderId, correlation_id: correlationId, event_id: eventId } = envelope;
+    const payload = envelope.payload as Record<string, any>;
 
-    if (event.type !== 'inventory.reserved') {
-      return;
+    const shouldFail = this.chaosEngine.shouldFail('notification');
+
+    if (eventType === EventTypes.NotificationRequested) {
+      if (shouldFail) {
+        throw new Error('Notification mail server unreachable (Chaos Injection)');
+      }
+
+      const notificationId = `notif_${uuidv4().slice(0, 8)}`;
+      const now = new Date().toISOString();
+
+      logger.info({
+        event: 'notification_delivered',
+        order_id: orderId,
+        recipient: payload.recipient,
+        channel: payload.channel,
+        template: payload.template,
+      });
+
+      await this.emit({
+        topic: topics.notifications.name,
+        eventType: EventTypes.NotificationSent,
+        aggregateId: orderId,
+        aggregateType: 'Notification',
+        correlationId,
+        causationId: eventId,
+        payload: {
+          notification_id: notificationId,
+          order_id: orderId,
+          user_id: payload.user_id || 'unknown',
+          channel: payload.channel || 'EMAIL',
+          sent_at: now,
+        },
+      });
     }
-
-    logger.info({
-      event: 'notification_sending_start',
-      order_id: event.order_id,
-      user_id: event.user_id,
-    });
-
-    await this.notificationService.sendOrderConfirmation({
-      order_id: event.order_id,
-      user_id: event.user_id,
-      items: event.items,
-    });
-
-    await this.db.updateOrderStatus(event.order_id, 'completed', {});
-    await this.db.recordEvent(event.order_id, 'notification.sent', 'notifications');
-
-    // Emit the terminal event so the read-side realtime consumer can broadcast
-    // the completed transition.
-    await this.emit(
-      'notifications',
-      'notification.sent',
-      {
-        event_id: `evt_${uuidv4().slice(0, 8)}`,
-        order_id: event.order_id,
-        user_id: event.user_id,
-        timestamp: new Date().toISOString(),
-        correlation_id: event.correlation_id || event.order_id,
-      },
-      event.order_id
-    );
-
-    const duration = Date.now() - startTime;
-    logger.info({
-      event: 'notification_sent',
-      order_id: event.order_id,
-      duration_ms: duration,
-    });
   }
 }

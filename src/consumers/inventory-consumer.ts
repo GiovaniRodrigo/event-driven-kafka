@@ -1,65 +1,79 @@
 import { BaseConsumer } from './base-consumer';
-import { InventoryService } from '../services/inventory-service';
+import { DatabaseService } from '../services/database';
+import { topics } from '../config';
+import { EventTypes } from '../contracts';
+import { EventEnvelope } from '../contracts/envelope';
+import { ChaosEngine } from '../chaos/chaos-engine';
 import { logger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
-/**
- * Consumes `payment.approved` from the `payments` topic, reserves inventory,
- * and emits `inventory.reserved` to the `inventory` topic for the
- * notification stage.
- */
 export class InventoryConsumer extends BaseConsumer {
-  private inventoryService: InventoryService;
+  private chaosEngine: ChaosEngine;
 
-  constructor() {
-    super('payments', 'inventory-processor-group');
-    this.inventoryService = new InventoryService(this.db);
+  constructor(dbInstance?: DatabaseService) {
+    super(topics.inventory.name, 'inventory-service-group', 'inventory-service', dbInstance);
+    this.chaosEngine = ChaosEngine.getInstance();
   }
 
-  protected async processEvent(event: any): Promise<void> {
-    const startTime = Date.now();
+  protected async processEvent(envelope: EventEnvelope): Promise<void> {
+    const { event_type: eventType, aggregate_id: orderId, correlation_id: correlationId, event_id: eventId } = envelope;
+    const payload = envelope.payload as Record<string, any>;
 
-    if (event.type !== 'payment.approved') {
+    await this.chaosEngine.checkLatency('inventory');
+    const shouldFail = this.chaosEngine.shouldFail('inventory');
+
+    if (eventType === EventTypes.InventoryReservationRequested) {
+      const items = (payload.items || []) as Array<{ sku: string; quantity: number; name: string }>;
+      const hasOutOfStock = items.some((i) => i.sku === 'OUT_OF_STOCK_ITEM' || i.quantity > 500);
+
+      if (shouldFail || hasOutOfStock) {
+        logger.warn({ event: 'inventory_reservation_failed', order_id: orderId, items });
+        await this.emit({
+          topic: topics.inventory.name,
+          eventType: EventTypes.InventoryReservationFailed,
+          aggregateId: orderId,
+          aggregateType: 'Inventory',
+          correlationId,
+          causationId: eventId,
+          payload: {
+            order_id: orderId,
+            items,
+            reason: shouldFail ? 'Chaos forced inventory failure' : 'SKU out of stock',
+            failed_at: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+
+      // Successful reservation
+      const reservationId = `res_${uuidv4().slice(0, 8)}`;
+      const now = new Date().toISOString();
+
+      await this.emit({
+        topic: topics.inventory.name,
+        eventType: EventTypes.InventoryReserved,
+        aggregateId: orderId,
+        aggregateType: 'Inventory',
+        correlationId,
+        causationId: eventId,
+        payload: {
+          reservation_id: reservationId,
+          order_id: orderId,
+          items,
+          reserved_at: now,
+        },
+      });
       return;
     }
 
-    logger.info({
-      event: 'inventory_processing_start',
-      order_id: event.order_id,
-      event_id: event.event_id,
-    });
-
-    const result = await this.inventoryService.reserveInventory({
-      order_id: event.order_id,
-      items: event.items,
-    });
-
-    await this.db.updateOrderStatus(event.order_id, 'inventory_reserved', {
-      reservation_id: result.reservation_id,
-    });
-    await this.db.recordEvent(event.order_id, 'inventory.reserved', 'inventory');
-
-    await this.emit(
-      'inventory',
-      'inventory.reserved',
-      {
-        event_id: `evt_${uuidv4().slice(0, 8)}`,
-        order_id: event.order_id,
-        user_id: event.user_id,
-        items: event.items,
-        reservation_id: result.reservation_id,
-        timestamp: new Date().toISOString(),
-        correlation_id: event.correlation_id || event.order_id,
-      },
-      event.order_id
-    );
-
-    const duration = Date.now() - startTime;
-    logger.info({
-      event: 'inventory_reserved',
-      order_id: event.order_id,
-      reservation_id: result.reservation_id,
-      duration_ms: duration,
-    });
+    if (eventType === EventTypes.InventoryReleased) {
+      logger.info({
+        event: 'inventory_released_compensation',
+        order_id: orderId,
+        reservation_id: payload.reservation_id,
+        items: payload.items,
+        reason: payload.reason,
+      });
+    }
   }
 }

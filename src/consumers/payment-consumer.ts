@@ -1,67 +1,94 @@
 import { BaseConsumer } from './base-consumer';
-import { PaymentService } from '../services/payment-service';
+import { DatabaseService } from '../services/database';
+import { topics } from '../config';
+import { EventTypes } from '../contracts';
+import { EventEnvelope } from '../contracts/envelope';
+import { ChaosEngine } from '../chaos/chaos-engine';
 import { logger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
-/**
- * Consumes `order.created` from the `orders` topic, processes payment, and
- * emits `payment.approved` to the `payments` topic for the inventory stage.
- */
 export class PaymentConsumer extends BaseConsumer {
-  private paymentService: PaymentService;
+  private chaosEngine: ChaosEngine;
 
-  constructor() {
-    super('orders', 'payment-processor-group');
-    this.paymentService = new PaymentService(this.db);
+  constructor(dbInstance?: DatabaseService) {
+    super(topics.payments.name, 'payment-service-group', 'payment-service', dbInstance);
+    this.chaosEngine = ChaosEngine.getInstance();
   }
 
-  protected async processEvent(event: any): Promise<void> {
-    const startTime = Date.now();
+  protected async processEvent(envelope: EventEnvelope): Promise<void> {
+    const { event_type: eventType, aggregate_id: orderId, correlation_id: correlationId, event_id: eventId } = envelope;
+    const payload = envelope.payload as Record<string, any>;
 
-    if (event.type !== 'order.created') {
+    // 1. Check Chaos Fault Injection
+    await this.chaosEngine.checkLatency('payment');
+    const shouldFail = this.chaosEngine.shouldFail('payment');
+
+    if (eventType === EventTypes.PaymentRequested) {
+      if (shouldFail) {
+        logger.warn({ event: 'chaos_payment_failure_triggered', order_id: orderId });
+        await this.emit({
+          topic: topics.payments.name,
+          eventType: EventTypes.PaymentRejected,
+          aggregateId: orderId,
+          aggregateType: 'Payment',
+          correlationId,
+          causationId: eventId,
+          payload: {
+            order_id: orderId,
+            user_id: payload.user_id,
+            amount: payload.amount,
+            reason: 'Card authorization failed (Chaos Injection)',
+            rejected_at: new Date().toISOString(),
+          },
+        });
+        return;
+      }
+
+      // Happy path authorization
+      const paymentId = `pay_${uuidv4().slice(0, 8)}`;
+      const authCode = `AUTH_${Math.floor(100000 + Math.random() * 900000)}`;
+      const now = new Date().toISOString();
+
+      await this.emit({
+        topic: topics.payments.name,
+        eventType: EventTypes.PaymentAuthorized,
+        aggregateId: orderId,
+        aggregateType: 'Payment',
+        correlationId,
+        causationId: eventId,
+        payload: {
+          payment_id: paymentId,
+          order_id: orderId,
+          user_id: payload.user_id,
+          amount: payload.amount,
+          authorization_code: authCode,
+          authorized_at: now,
+        },
+      });
       return;
     }
 
-    logger.info({
-      event: 'payment_processing_start',
-      order_id: event.order_id,
-      event_id: event.event_id,
-    });
+    if (eventType === EventTypes.PaymentRefundRequested) {
+      const refundId = `ref_${uuidv4().slice(0, 8)}`;
+      const now = new Date().toISOString();
 
-    const result = await this.paymentService.processPayment({
-      order_id: event.order_id,
-      user_id: event.user_id,
-      amount: event.total_amount,
-      items: event.items,
-    });
+      logger.info({ event: 'payment_refund_executed', order_id: orderId, payment_id: payload.payment_id });
 
-    await this.db.updateOrderStatus(event.order_id, 'payment_approved', {
-      payment_id: result.payment_id,
-    });
-    await this.db.recordEvent(event.order_id, 'payment.approved', 'payments');
-
-    await this.emit(
-      'payments',
-      'payment.approved',
-      {
-        event_id: `evt_${uuidv4().slice(0, 8)}`,
-        order_id: event.order_id,
-        user_id: event.user_id,
-        items: event.items,
-        amount: event.total_amount,
-        payment_id: result.payment_id,
-        timestamp: new Date().toISOString(),
-        correlation_id: event.correlation_id || event.order_id,
-      },
-      event.order_id
-    );
-
-    const duration = Date.now() - startTime;
-    logger.info({
-      event: 'payment_processed',
-      order_id: event.order_id,
-      payment_id: result.payment_id,
-      duration_ms: duration,
-    });
+      await this.emit({
+        topic: topics.payments.name,
+        eventType: EventTypes.PaymentRefunded,
+        aggregateId: orderId,
+        aggregateType: 'Payment',
+        correlationId,
+        causationId: eventId,
+        payload: {
+          refund_id: refundId,
+          payment_id: payload.payment_id || `pay_unknown`,
+          order_id: orderId,
+          amount: payload.amount,
+          refunded_at: now,
+        },
+      });
+    }
   }
 }
