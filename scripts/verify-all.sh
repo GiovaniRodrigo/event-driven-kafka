@@ -44,21 +44,50 @@ if docker ps >/dev/null 2>&1; then
   INFRA_STARTED=1
   
   echo ">> Waiting for PostgreSQL readiness..."
-  until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do
-    sleep 1
-  done
+  if ! timeout 60 bash -c 'until docker exec postgres pg_isready -U postgres -d event_driven_test >/dev/null 2>&1; do sleep 1; done'; then
+    echo "PostgreSQL failed to become ready within 60 seconds" >&2
+    exit 1
+  fi
   echo ">> PostgreSQL is ready."
 
   echo ">> Waiting for Kafka broker readiness..."
-  timeout 60 bash -c 'until nc -z localhost 9092; do sleep 1; done' 2>/dev/null || true
+  if ! timeout 60 bash -c 'until nc -z localhost 9092; do sleep 1; done' 2>/dev/null; then
+    echo "Kafka failed to become ready within 60 seconds" >&2
+    exit 1
+  fi
   echo ">> Kafka is ready."
 else
   echo ">> Docker daemon not directly accessible. Checking if localhost services are reachable..."
+  if ! timeout 5 bash -c 'until nc -z localhost 5432; do sleep 1; done' 2>/dev/null; then
+    echo "ERROR: PostgreSQL is not reachable at localhost:5432" >&2
+    exit 1
+  fi
+  if ! timeout 5 bash -c 'until nc -z localhost 9092; do sleep 1; done' 2>/dev/null; then
+    echo "ERROR: Kafka broker is not reachable at localhost:9092" >&2
+    exit 1
+  fi
+  echo ">> PostgreSQL and Kafka are reachable on localhost."
 fi
 
-# 2. Initialize Database Schema if DB reachable
-if command -v psql >/dev/null 2>&1; then
-  psql "${DATABASE_URL}" -f scripts/init-db.sql >/dev/null 2>&1 || true
+# 2. Initialize Database Schema
+echo ">> Initializing Database Schema on ${DATABASE_URL}..."
+if ! node -e "
+  const { Pool } = require('pg');
+  const fs = require('fs');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const sql = fs.readFileSync('scripts/init-db.sql', 'utf8');
+  pool.query(sql)
+    .then(() => {
+      console.log('>> Database schema initialized successfully.');
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('>> Database schema initialization failed:', err.message);
+      process.exit(1);
+    });
+"; then
+  echo "Failed to initialize database schema!" >&2
+  exit 1
 fi
 
 # 3. TypeScript Typecheck

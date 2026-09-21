@@ -43,7 +43,7 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_LOG_RETENTION_HOURS: 168
       KAFKA_LOG_RETENTION_BYTES: 1073741824
-      KAFKA_COMPRESSION_TYPE: snappy
+      KAFKA_COMPRESSION_TYPE: producer
       KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx512m -Xms256m}
     mem_limit: ${KAFKA_MEM_LIMIT:-1250m}
     cpus: ${KAFKA_CPUS:-1.5}
@@ -59,17 +59,17 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: event_driven
+      POSTGRES_DB: event_driven_test
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_INITDB_ARGS: "-c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB} -c max_connections=200"
+    command: postgres -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB} -c max_connections=200
     mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
     cpus: ${POSTGRES_CPUS:-1.0}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d event_driven_test"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -91,7 +91,7 @@ services:
     environment:
       NODE_ENV: development
       KAFKA_BROKER: kafka:29092
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/event_driven
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/event_driven_test
       LOG_LEVEL: info
       NODE_OPTIONS: ${APP_NODE_OPTIONS:---max-old-space-size=384}
     mem_limit: ${APP_MEM_LIMIT:-512m}
