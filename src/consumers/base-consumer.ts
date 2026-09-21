@@ -292,6 +292,7 @@ export abstract class BaseConsumer {
     error: Error;
   }): Promise<void> {
     const dlqId = `dlq_${uuidv4().slice(0, 8)}`;
+    const dlqOutboxId = `outbox_${dlqId}`;
     const dlqPayload = {
       dlq_id: dlqId,
       original_topic: params.topic,
@@ -306,25 +307,37 @@ export abstract class BaseConsumer {
     };
 
     try {
-      await this.db.recordDLQMessage({
-        id: dlqId,
-        eventId: 'malformed_event',
-        topic: params.topic,
-        partition: params.partition,
-        offset: params.offset,
-        consumerName: this.consumerName,
-        errorMessage: params.error.message,
-        stackTrace: params.error.stack,
-        payload: dlqPayload,
+      // 1. Atomically persist DLQ message and DLQ outbox in single database transaction
+      await this.db.withTransaction(async (client) => {
+        await this.db.recordDLQMessage({
+          id: dlqId,
+          eventId: 'malformed_event',
+          topic: params.topic,
+          partition: params.partition,
+          offset: params.offset,
+          consumerName: this.consumerName,
+          errorMessage: params.error.message,
+          stackTrace: params.error.stack,
+          payload: dlqPayload,
+        }, client);
+
+        await this.db.insertDLQOutboxEvent({
+          id: dlqOutboxId,
+          dlqId,
+          topic: topics.dlq.name,
+          payload: dlqPayload,
+        }, client);
       });
 
       logger.info({ event: 'dlq.persisted', dlq_id: dlqId, reason: 'NON_RETRYABLE' });
 
+      // 2. Publish to Kafka platform.dlq topic
       await this.producer.send({
         topic: topics.dlq.name,
         messages: [{ key: dlqId, value: JSON.stringify(dlqPayload) }],
       });
 
+      await this.db.markDLQOutboxPublished(dlqOutboxId, this.consumerName);
       logger.info({ event: 'dlq.published', dlq_id: dlqId, topic: topics.dlq.name });
     } catch (dlqError) {
       logger.error({ event: 'dlq.save_error', error: (dlqError as Error).message });
@@ -340,6 +353,7 @@ export abstract class BaseConsumer {
     attempts: number;
   }): Promise<void> {
     const dlqId = `dlq_${uuidv4().slice(0, 8)}`;
+    const dlqOutboxId = `outbox_${dlqId}`;
     const dlqPayload = {
       dlq_id: dlqId,
       original_event: params.envelope,
@@ -364,26 +378,34 @@ export abstract class BaseConsumer {
     });
 
     try {
-      // 1. Record in PostgreSQL DLQ table (durably persisted)
-      await this.db.recordDLQMessage({
-        id: dlqId,
-        eventId: params.envelope.event_id,
-        topic: params.topic,
-        partition: params.partition,
-        offset: params.offset,
-        consumerName: this.consumerName,
-        errorMessage: params.error.message,
-        stackTrace: params.error.stack,
-        payload: dlqPayload,
-        correlationId: params.envelope.correlation_id,
+      // 1. Atomically persist DLQ message, mark processed FAILED, and insert DLQ Outbox
+      await this.db.withTransaction(async (client) => {
+        await this.db.recordDLQMessage({
+          id: dlqId,
+          eventId: params.envelope.event_id,
+          topic: params.topic,
+          partition: params.partition,
+          offset: params.offset,
+          consumerName: this.consumerName,
+          errorMessage: params.error.message,
+          stackTrace: params.error.stack,
+          payload: dlqPayload,
+          correlationId: params.envelope.correlation_id,
+        }, client);
+
+        await this.db.markEventProcessed(params.envelope.event_id, this.consumerName, 'FAILED', params.error.message, client);
+
+        await this.db.insertDLQOutboxEvent({
+          id: dlqOutboxId,
+          dlqId,
+          topic: topics.dlq.name,
+          payload: dlqPayload,
+        }, client);
       });
 
       logger.info({ event: 'dlq.persisted', dlq_id: dlqId, event_id: params.envelope.event_id });
 
-      // 2. Mark processed as FAILED in idempotency table so it advances the offset
-      await this.db.markEventProcessed(params.envelope.event_id, this.consumerName, 'FAILED', params.error.message);
-
-      // 3. Publish to Kafka platform.dlq topic
+      // 2. Attempt Kafka emission
       await this.producer.send({
         topic: topics.dlq.name,
         messages: [
@@ -400,10 +422,11 @@ export abstract class BaseConsumer {
         ],
       });
 
+      await this.db.markDLQOutboxPublished(dlqOutboxId, this.consumerName);
       logger.info({ event: 'dlq.published', dlq_id: dlqId, topic: topics.dlq.name });
     } catch (dlqErr) {
       logger.error({ event: 'dlq.publish_error', error: (dlqErr as Error).message });
-      throw dlqErr;
+      // If Kafka publish fails, DLQ outbox guarantees retry without data loss
     }
   }
 
