@@ -112,15 +112,15 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   });
 
   it('verifies consumer restart and offset resumption without duplicate processing of committed offsets', async () => {
-    const orderId = `ord_restart_${Date.now()}`;
-    const envelope = createEventEnvelope({
+    const orderId1 = `ord_restart_1_${Date.now()}`;
+    const envelope1 = createEventEnvelope({
       eventType: EventTypes.PaymentAuthorized,
-      aggregateId: orderId,
+      aggregateId: orderId1,
       aggregateType: 'Payment',
       producer: 'payment-service',
-      correlationId: `corr_${orderId}`,
+      correlationId: `corr_${orderId1}`,
       causationId: 'evt_p1',
-      payload: { order_id: orderId, payment_id: `pay_${orderId}` },
+      payload: { order_id: orderId1, payment_id: `pay_${orderId1}` },
     });
 
     const groupId = `test-restart-group-${Date.now()}`;
@@ -140,11 +140,14 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     });
 
     await consumerInstance1.run({
-      autoCommit: true,
-      autoCommitInterval: 100,
-      eachMessage: async ({ message }) => {
+      autoCommit: false,
+      eachMessage: async ({ message, partition }) => {
         if (message.value) {
           receivedBatch1.push(JSON.parse(message.value.toString()));
+          // Explicit offset commit of message 1
+          await consumerInstance1.commitOffsets([
+            { topic: testTopic2, partition, offset: (BigInt(message.offset) + 1n).toString() },
+          ]);
           resolveBatch1();
         }
       },
@@ -153,14 +156,11 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     // Send message 1
     await producer.send({
       topic: testTopic2,
-      messages: [{ key: orderId, value: JSON.stringify(envelope) }],
+      messages: [{ key: orderId1, value: JSON.stringify(envelope1) }],
     });
 
     await batch1Promise;
     expect(receivedBatch1.length).toBe(1);
-
-    // Wait for autoCommit to persist offset
-    await new Promise((r) => setTimeout(r, 600));
 
     // Stop consumer 1 (simulated crash / restart)
     await consumerInstance1.stop();
@@ -177,18 +177,46 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     await consumerInstance2.connect();
     await consumerInstance2.subscribe({ topic: testTopic2, fromBeginning: true });
 
+    let resolveBatch2: () => void;
+    const batch2Promise = new Promise<void>((res) => {
+      resolveBatch2 = res;
+    });
+
     await consumerInstance2.run({
-      autoCommit: true,
-      eachMessage: async ({ message }) => {
+      autoCommit: false,
+      eachMessage: async ({ message, partition }) => {
         if (message.value) {
           receivedBatch2.push(JSON.parse(message.value.toString()));
+          await consumerInstance2.commitOffsets([
+            { topic: testTopic2, partition, offset: (BigInt(message.offset) + 1n).toString() },
+          ]);
+          resolveBatch2();
         }
       },
     });
 
-    // Wait 1.5 seconds to confirm no duplicate replay of committed message 1
-    await new Promise((r) => setTimeout(r, 1500));
-    expect(receivedBatch2.length).toBe(0);
+    // Send message 2 to the topic
+    const orderId2 = `ord_restart_2_${Date.now()}`;
+    const envelope2 = createEventEnvelope({
+      eventType: EventTypes.PaymentAuthorized,
+      aggregateId: orderId2,
+      aggregateType: 'Payment',
+      producer: 'payment-service',
+      correlationId: `corr_${orderId2}`,
+      causationId: 'evt_p2',
+      payload: { order_id: orderId2, payment_id: `pay_${orderId2}` },
+    });
+
+    await producer.send({
+      topic: testTopic2,
+      messages: [{ key: orderId2, value: JSON.stringify(envelope2) }],
+    });
+
+    await batch2Promise;
+
+    // Consumer 2 resumed from committed offset: received ONLY message 2 (no duplicate of message 1)
+    expect(receivedBatch2.length).toBe(1);
+    expect(receivedBatch2[0].aggregate_id).toBe(orderId2);
 
     await consumerInstance2.stop();
     await consumerInstance2.disconnect();
