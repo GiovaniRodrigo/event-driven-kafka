@@ -156,20 +156,31 @@ export class OutboxRelay {
         ],
       });
 
-      await this.db.markOutboxEventPublished(event.id, this.workerId);
+      const published = await this.db.markOutboxEventPublished(event.id, this.workerId);
 
       const duration = Date.now() - startTime;
-      logger.info({
-        event: 'outbox.published',
-        event_id: event.id,
-        aggregate_id: event.aggregate_id,
-        topic: event.topic,
-        event_type: event.event_type,
-        worker_id: this.workerId,
-        partition: result[0]?.partition,
-        offset: result[0]?.offset,
-        duration_ms: duration,
-      });
+      if (published) {
+        logger.info({
+          event: 'outbox.published',
+          event_id: event.id,
+          aggregate_id: event.aggregate_id,
+          topic: event.topic,
+          event_type: event.event_type,
+          worker_id: this.workerId,
+          partition: result[0]?.partition,
+          offset: result[0]?.offset,
+          duration_ms: duration,
+        });
+      } else {
+        logger.warn({
+          event: 'outbox.stale_worker_lost_lease',
+          event_id: event.id,
+          aggregate_id: event.aggregate_id,
+          worker_id: this.workerId,
+          topic: event.topic,
+          detail: 'Published to Kafka but lost DB lease before marking PUBLISHED (At-Least-Once delivery guaranteed)',
+        });
+      }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error({
@@ -181,7 +192,16 @@ export class OutboxRelay {
         error: errorMsg,
       });
 
-      await this.db.markOutboxEventFailed(event.id, errorMsg, this.workerId);
+      const failed = await this.db.markOutboxEventFailed(event.id, errorMsg, this.workerId);
+      if (!failed) {
+        logger.warn({
+          event: 'outbox.stale_worker_lost_lease',
+          event_id: event.id,
+          aggregate_id: event.aggregate_id,
+          worker_id: this.workerId,
+          detail: 'Failed to record failure in DB because worker lost lease to another worker',
+        });
+      }
     }
   }
 }

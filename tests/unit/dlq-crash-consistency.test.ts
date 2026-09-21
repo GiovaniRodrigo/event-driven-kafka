@@ -29,6 +29,11 @@ describe('Dead Letter Queue (DLQ) Crash Consistency & Safe Replay Tests', () => 
     kafkaTargetMessages = [];
 
     dbMock = {
+      withTransaction: jest.fn().mockImplementation(async (cb) => {
+        return await cb({});
+      }),
+      insertDLQOutboxEvent: jest.fn().mockResolvedValue(undefined),
+      markDLQOutboxPublished: jest.fn().mockResolvedValue(true),
       recordDLQMessage: jest.fn().mockImplementation(async (dlq) => {
         dlqTable.push({
           id: dlq.id,

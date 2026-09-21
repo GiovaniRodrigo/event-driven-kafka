@@ -1,8 +1,8 @@
 # 04. Transactional Outbox Pattern & Relay Engine
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Author:** Giovani Rodrigo  
-**Status:** IMPLEMENTED & PRODUCTION HARDENED  
+**Status:** PRODUCTION HARDENED & LEASE FENCED  
 
 ---
 
@@ -44,11 +44,11 @@ sequenceDiagram
     end
     API-->>Client: 202 Accepted (order_id, correlation_id)
 
-    loop Asynchronous Polling with Atomic Lease
+    loop Asynchronous Polling with Atomic Lease & Fencing
         Relay->>DB: UPDATE outbox_events SET status = 'PROCESSING', lease_owner = $worker, lease_expires_at = NOW() + INTERVAL '30s' WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED) RETURNING *
         Relay->>Kafka: Produce event to topic (Key = aggregate_id)
         Kafka-->>Relay: Ack (Partition, Offset)
-        Relay->>DB: UPDATE outbox_events SET status = 'PUBLISHED', published_at = NOW()
+        Relay->>DB: UPDATE outbox_events SET status = 'PUBLISHED' WHERE id = $1 AND status = 'PROCESSING' AND lease_owner = $worker
     end
 ```
 
@@ -78,8 +78,7 @@ CREATE TABLE outbox_events (
 );
 
 CREATE INDEX idx_outbox_pending
-ON outbox_events (status, created_at)
-WHERE status = 'PENDING';
+ON outbox_events (status, created_at);
 
 CREATE INDEX idx_outbox_lease_recovery
 ON outbox_events (status, lease_expires_at)
@@ -96,5 +95,14 @@ Multiple outbox relay worker processes or threads can safely run concurrently. B
 ### 4.2 Explicit Lease Ownership & Worker Crash Recovery
 Each batch of rows is atomically assigned to a worker (`lease_owner = workerId`) with a deterministic lease expiration (`lease_expires_at = NOW() + INTERVAL '30 seconds'`). If a worker crashes mid-batch, subsequent relay ticks automatically claim expired rows (`lease_expires_at < NOW()`).
 
-### 4.3 At-Least-Once Delivery Guarantee
+### 4.3 Stale Worker Lease Fencing (`STALE_WORKER_LOST_LEASE`)
+If Worker A's network stalls and its lease expires, Worker B claims the row (`lease_owner = Worker B`). If Worker A later finishes and attempts to mark the row as `PUBLISHED`, the conditional SQL update:
+```sql
+UPDATE outbox_events
+SET status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP, lease_owner = NULL, lease_expires_at = NULL
+WHERE id = $1 AND status = 'PROCESSING' AND lease_owner = $2
+```
+matches `0` rows. The database rejects Worker A's stale completion (`rowCount === 0`), and Worker B remains authoritative.
+
+### 4.4 At-Least-Once Delivery Guarantee
 If an outbox worker crashes after Kafka acknowledges the message but before updating PostgreSQL to `PUBLISHED`, the next polling iteration will redeliver the event. Downstream consumers eliminate duplicate deliveries via their **Scoped Idempotent Consumer Guards** (`UNIQUE(event_id, consumer_name)`).

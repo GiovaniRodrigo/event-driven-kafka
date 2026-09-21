@@ -226,3 +226,21 @@ CREATE TABLE IF NOT EXISTS metrics (
   labels JSONB DEFAULT '{}'::jsonb,
   timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 11. Transactional DLQ Outbox for Crash Consistency
+CREATE TABLE IF NOT EXISTS dlq_outbox (
+  id VARCHAR(100) PRIMARY KEY,
+  dlq_id VARCHAR(100) NOT NULL,
+  topic VARCHAR(100) NOT NULL,
+  payload JSONB NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  lease_owner VARCHAR(100),
+  leased_at TIMESTAMP,
+  lease_expires_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  published_at TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dlq_outbox_pending ON dlq_outbox (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_dlq_outbox_lease ON dlq_outbox (lease_expires_at) WHERE status = 'PROCESSING';
