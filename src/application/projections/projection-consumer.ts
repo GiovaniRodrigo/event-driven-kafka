@@ -114,7 +114,7 @@ export class ProjectionConsumer extends BaseConsumer {
             ) VALUES ($1, $2, $3, $4, 'AUTHORIZED', $5, $6, $6)
             ON CONFLICT (payment_id) DO UPDATE SET status = 'AUTHORIZED', updated_at = EXCLUDED.updated_at
           `,
-            [payload.payment_id, orderId, payload.user_id, payload.amount, payload.authorization_code, occurredAt]
+            [payload.payment_id, orderId, payload.user_id || 'usr_anonymous', payload.amount, payload.authorization_code, occurredAt]
           );
           break;
         }

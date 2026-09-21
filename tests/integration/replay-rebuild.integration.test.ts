@@ -5,9 +5,9 @@ import { createEventEnvelope } from '../../src/contracts/envelope';
 import { EventTypes } from '../../src/contracts';
 import { Pool } from 'pg';
 
-describe('Deterministic Replay & Projection Rebuild Integration Tests', () => {
+describe('Deterministic Replay & Projection Transactionality Integration Tests (PostgreSQL)', () => {
   let db: DatabaseService;
-  let isRealPostgres = false;
+  let pool: Pool;
   let gatewayMock: any;
   let projectionConsumer: ProjectionConsumer;
   let replayService: EventReplayService;
@@ -20,36 +20,31 @@ describe('Deterministic Replay & Projection Rebuild Integration Tests', () => {
       consumerHealth: jest.fn(),
     };
 
-    const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/event_driven';
-    const testPool = new Pool({ connectionString: dbUrl, connectionTimeoutMillis: 1000 });
-    try {
-      await testPool.query('SELECT 1');
-      isRealPostgres = true;
-      db = new DatabaseService(testPool);
-      await db.initializeTables();
-      projectionConsumer = new ProjectionConsumer(gatewayMock, db);
-      replayService = new EventReplayService(db, projectionConsumer);
-    } catch {
-      isRealPostgres = false;
-    } finally {
-      if (!isRealPostgres) {
-        await testPool.end().catch(() => {});
-      }
-    }
+    const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/event_driven_test';
+    pool = new Pool({ connectionString: dbUrl, connectionTimeoutMillis: 3000 });
+    // This MUST fail loudly if PostgreSQL is unreachable
+    await pool.query('SELECT 1');
+    db = new DatabaseService(pool);
+    await db.initializeTables();
+    projectionConsumer = new ProjectionConsumer(gatewayMock, db);
+    replayService = new EventReplayService(db, projectionConsumer);
+  });
+
+  beforeEach(async () => {
+    gatewayMock.orderCreated.mockClear();
+    gatewayMock.orderUpdated.mockClear();
+    gatewayMock.orderEvent.mockClear();
+    gatewayMock.consumerHealth.mockClear();
+    await pool.query('TRUNCATE event_store, order_read_model, inventory_read_model, payment_read_model, shipment_read_model, projection_applied_events RESTART IDENTITY CASCADE');
   });
 
   afterAll(async () => {
-    if (isRealPostgres && db) {
+    if (db) {
       await db.disconnect().catch(() => {});
     }
   });
 
   it('proves deterministic projection reconstruction with zero external side effects and identical state', async () => {
-    if (!isRealPostgres) {
-      console.warn('Skipping Replay Rebuild on real Postgres (INFRASTRUCTURE UNAVAILABLE)');
-      return;
-    }
-
     const orderId = `ord_replay_int_${Date.now()}`;
     const correlationId = `corr_${orderId}`;
 
@@ -80,6 +75,7 @@ describe('Deterministic Replay & Projection Rebuild Integration Tests', () => {
         sequenceNumber: 2,
         payload: {
           order_id: orderId,
+          user_id: 'usr_replay_1',
           payment_id: `pay_${orderId}`,
           amount: 150,
           authorization_code: 'AUTH_REPLAY_1',
@@ -144,12 +140,7 @@ describe('Deterministic Replay & Projection Rebuild Integration Tests', () => {
     const eventCountBefore = (await db.getEventsByAggregateId(orderId)).length;
     expect(eventCountBefore).toBe(6);
 
-    // 2. Clear gateway mock calls to verify zero side-effects during replay
-    gatewayMock.orderCreated.mockClear();
-    gatewayMock.orderUpdated.mockClear();
-    gatewayMock.orderEvent.mockClear();
-
-    // 3. Replay Run #1
+    // 2. Replay Run #1
     const replay1 = await replayService.replayAggregate(orderId);
     expect(replay1.status).toBe('SUCCESS');
     expect(replay1.events_processed).toBe(6);
@@ -163,18 +154,78 @@ describe('Deterministic Replay & Projection Rebuild Integration Tests', () => {
     expect(gatewayMock.orderUpdated).not.toHaveBeenCalled();
     expect(gatewayMock.orderEvent).not.toHaveBeenCalled();
 
-    // 4. Replay Run #2
+    // 3. Replay Run #2
     const replay2 = await replayService.replayAggregate(orderId);
     expect(replay2.status).toBe('SUCCESS');
     const stateB = replay2.reconstructed_state;
 
-    // 5. State A strictly equals State B (Deterministic Rebuild)
+    // 4. State A strictly equals State B (Deterministic Rebuild)
     expect(stateA.status).toEqual(stateB.status);
     expect(stateA.total_amount).toEqual(stateB.total_amount);
     expect(stateA.items).toEqual(stateB.items);
 
-    // 6. Verify Event Store remained 100% unchanged (no re-appending)
+    // 5. Verify Event Store remained 100% unchanged (no re-appending)
     const eventCountAfter = (await db.getEventsByAggregateId(orderId)).length;
     expect(eventCountAfter).toBe(6);
+  });
+
+  it('guarantees transactional atomicity between projection state mutations and projection_applied_events markers', async () => {
+    const orderId = `ord_tx_atom_${Date.now()}`;
+    const eventId = `evt_tx_1`;
+
+    const event = createEventEnvelope({
+      eventId,
+      eventType: EventTypes.OrderCreated,
+      aggregateId: orderId,
+      aggregateType: 'Order',
+      producer: 'order-service',
+      correlationId: `corr_${orderId}`,
+      causationId: 'cmd_1',
+      sequenceNumber: 1,
+      payload: {
+        order_id: orderId,
+        user_id: 'usr_atom_1',
+        total_amount: 99,
+        currency: 'USD',
+        items: [{ sku: 'SKU-ATOM', name: 'Item', price: 99, quantity: 1 }],
+      },
+    });
+
+    // 1. Process successfully within transaction
+    await db.withTransaction(async (client) => {
+      await (projectionConsumer as any).applyHistoricalEvent(event, client);
+    });
+
+    // Verify both read model and marker exist
+    const readModel = await db.getOrder(orderId);
+    expect(readModel).toBeDefined();
+    expect(readModel?.id).toBe(orderId);
+
+    const isApplied = await db.isProjectionEventApplied('order-fulfillment-projection', eventId);
+    expect(isApplied).toBe(true);
+
+    // 2. Simulated failure mid-transaction on second event
+    const event2 = createEventEnvelope({
+      eventId: 'evt_tx_fail',
+      eventType: EventTypes.PaymentAuthorized,
+      aggregateId: orderId,
+      aggregateType: 'Payment',
+      producer: 'payment-service',
+      correlationId: `corr_${orderId}`,
+      causationId: 'evt_1',
+      sequenceNumber: 2,
+      payload: { order_id: orderId, user_id: 'usr_atom_1', payment_id: 'pay_fail', amount: 99 },
+    });
+
+    await expect(
+      db.withTransaction(async (client) => {
+        await (projectionConsumer as any).applyHistoricalEvent(event2, client);
+        throw new Error('Simulated database write failure during projection');
+      })
+    ).rejects.toThrow('Simulated database write failure during projection');
+
+    // Verify marker was rolled back and NOT persisted
+    const isMarker2Applied = await db.isProjectionEventApplied('order-fulfillment-projection', 'evt_tx_fail');
+    expect(isMarker2Applied).toBe(false);
   });
 });

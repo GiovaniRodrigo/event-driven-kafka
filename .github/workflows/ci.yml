@@ -1,0 +1,113 @@
+name: CI & Distributed Verification Gate
+
+on:
+  push:
+    branches: [main, 'verification/*', 'red-team/*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Distributed Consistency & Quality Gates
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: event_driven_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d event_driven_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.5.0
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+        ports:
+          - 2181:2181
+
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+        ports:
+          - 9092:9092
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/event_driven_test
+      KAFKA_BROKER: localhost:9092
+      KAFKA_CLIENT_ID: ci-kafka-client
+      KAFKA_GROUP_ID: ci-kafka-group
+      LOG_LEVEL: warn
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Wait for Kafka & PostgreSQL Readiness
+        run: |
+          echo "Waiting for PostgreSQL..."
+          until pg_isready -h localhost -p 5432 -U postgres -d event_driven_test; do
+            sleep 1
+          done
+          echo "PostgreSQL is ready."
+
+          echo "Waiting for Kafka..."
+          timeout 60 bash -c 'until nc -z localhost 9092; do sleep 1; done'
+          echo "Kafka port is open."
+
+      - name: Initialize Database Schema
+        run: |
+          npm run build
+          node -e "
+            const { Pool } = require('pg');
+            const fs = require('fs');
+            const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+            const sql = fs.readFileSync('scripts/init-db.sql', 'utf8');
+            pool.query(sql).then(() => { console.log('Database initialized successfully'); process.exit(0); }).catch(e => { console.error(e); process.exit(1); });
+          "
+
+      - name: 1. TypeScript & Typecheck Gate
+        run: npx tsc --noEmit
+
+      - name: 2. Build Gate
+        run: npm run build
+
+      - name: 3. Unit Test Gate
+        run: npm run test:unit
+
+      - name: 4. PostgreSQL & Kafka Integration Gate
+        run: npm run test:integration
+
+      - name: 5. HTTP API Gate
+        run: npm run test:http
+
+      - name: 6. Realtime Gateway & Consumer Gate
+        run: npm run test:realtime
+
+      - name: 7. End-to-End Fulfillment Gate
+        run: npm run test:e2e
