@@ -101,6 +101,8 @@ describe('Red Team Audit Resilience & Concurrency Verification', () => {
       }),
 
       // DLQ
+      insertDLQOutboxEvent: jest.fn().mockResolvedValue(undefined),
+      markDLQOutboxPublished: jest.fn().mockResolvedValue(true),
       recordDLQMessage: jest.fn().mockImplementation(async (dlq) => {
         dlqTable.push(dlq);
       }),

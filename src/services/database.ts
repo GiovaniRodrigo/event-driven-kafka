@@ -57,8 +57,12 @@ export interface DLQMessageRow {
 export class DatabaseService {
   private pool: Pool;
 
-  constructor(poolConfig = databaseConfig) {
-    this.pool = new Pool(poolConfig);
+  constructor(poolOrConfig: any = databaseConfig) {
+    if (poolOrConfig && typeof poolOrConfig.query === 'function' && typeof poolOrConfig.connect === 'function') {
+      this.pool = poolOrConfig as Pool;
+    } else {
+      this.pool = new Pool(poolOrConfig);
+    }
 
     this.pool.on('error', (error) => {
       logger.error({ event: 'pool_error', error: error.message });
@@ -67,6 +71,10 @@ export class DatabaseService {
 
   getPool(): Pool {
     return this.pool;
+  }
+
+  async initializeTables(): Promise<void> {
+    await this.createTables();
   }
 
   async withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -352,6 +360,26 @@ export class DatabaseService {
         );
       `);
 
+      // 11. Transactional DLQ Outbox Table (Durable Crash Consistency)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS dlq_outbox (
+          id VARCHAR(100) PRIMARY KEY,
+          dlq_id VARCHAR(100) NOT NULL,
+          topic VARCHAR(100) NOT NULL,
+          payload JSONB NOT NULL,
+          status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+          attempts INT NOT NULL DEFAULT 0,
+          last_error TEXT,
+          lease_owner VARCHAR(100),
+          leased_at TIMESTAMP,
+          lease_expires_at TIMESTAMP,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          published_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_dlq_outbox_pending ON dlq_outbox (status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_dlq_outbox_lease ON dlq_outbox (lease_expires_at) WHERE status = 'PROCESSING';
+      `);
+
       logger.info({ event: 'database_tables_initialized' });
     } finally {
       client.release();
@@ -447,7 +475,7 @@ export class DatabaseService {
     }));
   }
 
-  async markOutboxEventPublished(id: string, workerId?: string, client?: PoolClient): Promise<void> {
+  async markOutboxEventPublished(id: string, workerId?: string, client?: PoolClient): Promise<boolean> {
     const query = `
       UPDATE outbox_events
       SET status = 'PUBLISHED',
@@ -455,12 +483,25 @@ export class DatabaseService {
           lease_owner = NULL,
           lease_expires_at = NULL
       WHERE id = $1
+        AND status = 'PROCESSING'
+        AND ($2::VARCHAR IS NULL OR lease_owner = $2)
     `;
     const runner = client || this.pool;
-    await runner.query(query, [id]);
+    const result = await runner.query(query, [id, workerId || null]);
+    const success = (result.rowCount ?? 0) > 0;
+    if (!success && workerId) {
+      logger.warn({
+        event: 'outbox.stale_worker_rejected',
+        event_id: id,
+        worker_id: workerId,
+        action: 'MARK_PUBLISHED',
+        reason: 'STALE_WORKER_LOST_LEASE',
+      });
+    }
+    return success;
   }
 
-  async markOutboxEventFailed(id: string, error: string, workerId?: string, client?: PoolClient): Promise<void> {
+  async markOutboxEventFailed(id: string, error: string, workerId?: string, client?: PoolClient): Promise<boolean> {
     const query = `
       UPDATE outbox_events
       SET last_error = $2,
@@ -468,9 +509,129 @@ export class DatabaseService {
           lease_expires_at = NULL,
           status = CASE WHEN attempts >= 10 THEN 'FAILED' ELSE 'PENDING' END
       WHERE id = $1
+        AND status = 'PROCESSING'
+        AND ($3::VARCHAR IS NULL OR lease_owner = $3)
     `;
     const runner = client || this.pool;
-    await runner.query(query, [id, error]);
+    const result = await runner.query(query, [id, error, workerId || null]);
+    const success = (result.rowCount ?? 0) > 0;
+    if (!success && workerId) {
+      logger.warn({
+        event: 'outbox.stale_worker_rejected',
+        event_id: id,
+        worker_id: workerId,
+        action: 'MARK_FAILED',
+        reason: 'STALE_WORKER_LOST_LEASE',
+      });
+    }
+    return success;
+  }
+
+  // --- DLQ OUTBOX METHODS (TRANSACTIONAL CRASH CONSISTENCY) ---
+
+  async insertDLQOutboxEvent(
+    event: {
+      id: string;
+      dlqId: string;
+      topic: string;
+      payload: Record<string, unknown>;
+    },
+    client?: PoolClient
+  ): Promise<void> {
+    const query = `
+      INSERT INTO dlq_outbox (
+        id, dlq_id, topic, payload, status, created_at
+      ) VALUES ($1, $2, $3, $4, 'PENDING', CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO NOTHING
+    `;
+    const runner = client || this.pool;
+    await runner.query(query, [event.id, event.dlqId, event.topic, JSON.stringify(event.payload)]);
+  }
+
+  async getPendingDLQOutboxEvents(
+    limit = 50,
+    workerId = 'default-dlq-worker',
+    leaseDurationSeconds = 30,
+    client?: PoolClient
+  ): Promise<Array<{
+    id: string;
+    dlq_id: string;
+    topic: string;
+    payload: any;
+    status: string;
+    attempts: number;
+    last_error?: string;
+    lease_owner?: string;
+    leased_at?: Date;
+    lease_expires_at?: Date;
+    created_at: Date;
+    published_at?: Date;
+  }>> {
+    const query = `
+      UPDATE dlq_outbox
+      SET status = 'PROCESSING',
+          lease_owner = $2,
+          leased_at = CURRENT_TIMESTAMP,
+          lease_expires_at = CURRENT_TIMESTAMP + ($3 || ' seconds')::INTERVAL,
+          attempts = attempts + 1
+      WHERE id IN (
+        SELECT id FROM dlq_outbox
+        WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND (lease_expires_at IS NULL OR lease_expires_at < CURRENT_TIMESTAMP)))
+          AND attempts < 10
+        ORDER BY created_at ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *;
+    `;
+    const runner = client || this.pool;
+    const result = await runner.query(query, [limit, workerId, leaseDurationSeconds]);
+    return result.rows.map((r) => ({
+      id: r.id,
+      dlq_id: r.dlq_id,
+      topic: r.topic,
+      payload: r.payload,
+      status: r.status,
+      attempts: r.attempts,
+      last_error: r.last_error,
+      lease_owner: r.lease_owner,
+      leased_at: r.leased_at ? new Date(r.leased_at) : undefined,
+      lease_expires_at: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
+      created_at: new Date(r.created_at),
+      published_at: r.published_at ? new Date(r.published_at) : undefined,
+    }));
+  }
+
+  async markDLQOutboxPublished(id: string, workerId?: string, client?: PoolClient): Promise<boolean> {
+    const query = `
+      UPDATE dlq_outbox
+      SET status = 'PUBLISHED',
+          published_at = CURRENT_TIMESTAMP,
+          lease_owner = NULL,
+          lease_expires_at = NULL
+      WHERE id = $1
+        AND status = 'PROCESSING'
+        AND ($2::VARCHAR IS NULL OR lease_owner = $2)
+    `;
+    const runner = client || this.pool;
+    const result = await runner.query(query, [id, workerId || null]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async markDLQOutboxFailed(id: string, error: string, workerId?: string, client?: PoolClient): Promise<boolean> {
+    const query = `
+      UPDATE dlq_outbox
+      SET last_error = $2,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          status = CASE WHEN attempts >= 10 THEN 'FAILED' ELSE 'PENDING' END
+      WHERE id = $1
+        AND status = 'PROCESSING'
+        AND ($3::VARCHAR IS NULL OR lease_owner = $3)
+    `;
+    const runner = client || this.pool;
+    const result = await runner.query(query, [id, error, workerId || null]);
+    return (result.rowCount ?? 0) > 0;
   }
 
   // --- IDEMPOTENCY / PROCESSED EVENTS ---
@@ -558,16 +719,19 @@ export class DatabaseService {
 
   // --- SAGA INSTANCE METHODS ---
 
-  async saveSagaInstance(saga: {
-    sagaId: string;
-    aggregateId: string;
-    sagaType: string;
-    state: string;
-    currentStep: string;
-    correlationId: string;
-    context: Record<string, unknown>;
-    failureReason?: string;
-  }): Promise<void> {
+  async saveSagaInstance(
+    saga: {
+      sagaId: string;
+      aggregateId: string;
+      sagaType: string;
+      state: string;
+      currentStep: string;
+      correlationId: string;
+      context: Record<string, unknown>;
+      failureReason?: string;
+    },
+    client?: PoolClient
+  ): Promise<void> {
     const query = `
       INSERT INTO saga_instances (
         saga_id, aggregate_id, saga_type, state, current_step,
@@ -580,7 +744,8 @@ export class DatabaseService {
           failure_reason = EXCLUDED.failure_reason,
           updated_at = CURRENT_TIMESTAMP
     `;
-    await this.pool.query(query, [
+    const runner = client || this.pool;
+    await runner.query(query, [
       saga.sagaId,
       saga.aggregateId,
       saga.sagaType,
@@ -592,9 +757,10 @@ export class DatabaseService {
     ]);
   }
 
-  async getSagaInstance(sagaId: string): Promise<SagaInstanceRow | null> {
+  async getSagaInstance(sagaId: string, client?: PoolClient): Promise<SagaInstanceRow | null> {
     const query = 'SELECT * FROM saga_instances WHERE saga_id = $1';
-    const result = await this.pool.query(query, [sagaId]);
+    const runner = client || this.pool;
+    const result = await runner.query(query, [sagaId]);
     if (result.rows.length === 0) return null;
     const r = result.rows[0];
     return {
@@ -611,9 +777,29 @@ export class DatabaseService {
     };
   }
 
-  async getSagaByAggregateId(aggregateId: string): Promise<SagaInstanceRow | null> {
+  async getSagaByAggregateId(aggregateId: string, client?: PoolClient): Promise<SagaInstanceRow | null> {
     const query = 'SELECT * FROM saga_instances WHERE aggregate_id = $1 ORDER BY created_at DESC LIMIT 1';
-    const result = await this.pool.query(query, [aggregateId]);
+    const runner = client || this.pool;
+    const result = await runner.query(query, [aggregateId]);
+    if (result.rows.length === 0) return null;
+    const r = result.rows[0];
+    return {
+      saga_id: r.saga_id,
+      aggregate_id: r.aggregate_id,
+      saga_type: r.saga_type,
+      state: r.state,
+      current_step: r.current_step,
+      correlation_id: r.correlation_id,
+      context: r.context,
+      failure_reason: r.failure_reason,
+      created_at: new Date(r.created_at),
+      updated_at: new Date(r.updated_at),
+    };
+  }
+
+  async getSagaByAggregateIdForUpdate(aggregateId: string, client: PoolClient): Promise<SagaInstanceRow | null> {
+    const query = 'SELECT * FROM saga_instances WHERE aggregate_id = $1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE';
+    const result = await client.query(query, [aggregateId]);
     if (result.rows.length === 0) return null;
     const r = result.rows[0];
     return {
@@ -650,32 +836,47 @@ export class DatabaseService {
   // --- EVENT STORE METHODS WITH EXPLICIT SEQUENCE ORDERING ---
 
   async appendToEventStore(event: EventEnvelope, client?: PoolClient): Promise<void> {
-    const query = `
-      INSERT INTO event_store (
-        event_id, aggregate_id, aggregate_type, event_type, event_version,
-        sequence_number, payload, correlation_id, causation_id, producer, occurred_at, created_at
-      ) VALUES (
-        $1, $2, $3, $4, $5,
-        COALESCE($6, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2)),
-        $7, $8, $9, $10, $11, CURRENT_TIMESTAMP
-      )
-      ON CONFLICT (event_id) DO NOTHING
-    `;
-    const params = [
-      event.event_id,
-      event.aggregate_id,
-      event.aggregate_type,
-      event.event_type,
-      event.event_version,
-      event.sequence_number || null,
-      JSON.stringify(event.payload),
-      event.correlation_id,
-      event.causation_id,
-      event.producer,
-      event.occurred_at,
-    ];
-    const runner = client || this.pool;
-    await runner.query(query, params);
+    const execute = async (c: PoolClient) => {
+      // Serialize appends per aggregate to prevent sequence race conditions
+      try {
+        await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [event.aggregate_id]);
+      } catch {
+        // Fallback if advisory lock unavailable
+      }
+      const query = `
+        INSERT INTO event_store (
+          event_id, aggregate_id, aggregate_type, event_type, event_version,
+          sequence_number, payload, correlation_id, causation_id, producer, occurred_at, created_at
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          COALESCE($6, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2)),
+          $7, $8, $9, $10, $11, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (event_id) DO NOTHING
+      `;
+      const params = [
+        event.event_id,
+        event.aggregate_id,
+        event.aggregate_type,
+        event.event_type,
+        event.event_version,
+        event.sequence_number || null,
+        JSON.stringify(event.payload),
+        event.correlation_id,
+        event.causation_id,
+        event.producer,
+        event.occurred_at,
+      ];
+      await c.query(query, params);
+    };
+
+    if (client) {
+      await execute(client);
+    } else {
+      await this.withTransaction(async (c) => {
+        await execute(c);
+      });
+    }
   }
 
   async getEventsByAggregateId(aggregateId: string): Promise<EventEnvelope[]> {
@@ -703,18 +904,21 @@ export class DatabaseService {
 
   // --- DLQ METHODS ---
 
-  async recordDLQMessage(dlq: {
-    id: string;
-    eventId: string;
-    topic: string;
-    partition: number;
-    offset: string;
-    consumerName: string;
-    errorMessage: string;
-    stackTrace?: string;
-    payload: Record<string, unknown>;
-    correlationId?: string;
-  }): Promise<void> {
+  async recordDLQMessage(
+    dlq: {
+      id: string;
+      eventId: string;
+      topic: string;
+      partition: number;
+      offset: string;
+      consumerName: string;
+      errorMessage: string;
+      stackTrace?: string;
+      payload: Record<string, unknown>;
+      correlationId?: string;
+    },
+    client?: PoolClient
+  ): Promise<void> {
     const query = `
       INSERT INTO dlq_messages (
         id, event_id, topic, partition, offset_val, consumer_name,
@@ -725,7 +929,8 @@ export class DatabaseService {
           error_message = EXCLUDED.error_message,
           failed_at = CURRENT_TIMESTAMP
     `;
-    await this.pool.query(query, [
+    const runner = client || this.pool;
+    await runner.query(query, [
       dlq.id,
       dlq.eventId,
       dlq.topic,
