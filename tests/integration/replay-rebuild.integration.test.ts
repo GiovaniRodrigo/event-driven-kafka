@@ -200,7 +200,7 @@ describe('Deterministic Replay & Projection Transactionality Integration Tests (
     expect(readModel).toBeDefined();
     expect(readModel?.id).toBe(orderId);
 
-    const isApplied = await db.isProjectionEventApplied('order_projection', eventId);
+    const isApplied = await db.isProjectionEventApplied('order-fulfillment-projection', eventId);
     expect(isApplied).toBe(true);
 
     // 2. Simulated failure mid-transaction on second event
@@ -224,7 +224,7 @@ describe('Deterministic Replay & Projection Transactionality Integration Tests (
     ).rejects.toThrow('Simulated database write failure during projection');
 
     // Verify marker was rolled back and NOT persisted
-    const isMarker2Applied = await db.isProjectionEventApplied('order_projection', 'evt_tx_fail');
+    const isMarker2Applied = await db.isProjectionEventApplied('order-fulfillment-projection', 'evt_tx_fail');
     expect(isMarker2Applied).toBe(false);
   });
 });
