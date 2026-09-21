@@ -250,7 +250,15 @@ export class SagaOrchestrator extends BaseConsumer {
           ...context,
           inventory_failure_reason: payload.reason,
           compensations_pending: ['PAYMENT_REFUND'],
+          compensations_completed: [],
         };
+
+        logger.info({
+          event: 'saga.compensation_started',
+          order_id: orderId,
+          reason: 'INVENTORY_FAILED',
+          pending: updatedContext.compensations_pending,
+        });
 
         await this.db.saveSagaInstance({
           sagaId: saga.saga_id,
@@ -334,6 +342,13 @@ export class SagaOrchestrator extends BaseConsumer {
           compensations_pending: ['INVENTORY_RELEASE', 'PAYMENT_REFUND'],
           compensations_completed: [],
         };
+
+        logger.info({
+          event: 'saga.compensation_started',
+          order_id: orderId,
+          reason: 'FRAUD_REJECTED',
+          pending: updatedContext.compensations_pending,
+        });
 
         await this.db.saveSagaInstance({
           sagaId: saga.saga_id,
@@ -458,7 +473,15 @@ export class SagaOrchestrator extends BaseConsumer {
           ...context,
           shipment_failure_reason: payload.reason,
           compensations_pending: ['INVENTORY_RELEASE', 'PAYMENT_REFUND'],
+          compensations_completed: [],
         };
+
+        logger.info({
+          event: 'saga.compensation_started',
+          order_id: orderId,
+          reason: 'SHIPMENT_FAILED',
+          pending: updatedContext.compensations_pending,
+        });
 
         await this.db.saveSagaInstance({
           sagaId: saga.saga_id,
@@ -504,50 +527,118 @@ export class SagaOrchestrator extends BaseConsumer {
         break;
       }
 
-      // Compensation Resolvers
+      // Compensation Barrier Resolver 1: Payment Refunded
       case EventTypes.PaymentRefunded: {
         if (!saga || saga.state !== 'COMPENSATING') {
           logger.warn({ event: 'saga_unexpected_payment_refunded', order_id: orderId, current_state: saga?.state });
           return;
         }
 
-        const compensations: string[] = Array.isArray(context.compensations_completed)
-          ? [...context.compensations_completed]
-          : [];
-        compensations.push('PAYMENT_REFUND');
-        const updatedContext: SagaContext = { ...context, compensations_completed: compensations };
+        await this.handleCompensationCompletion(saga, context, 'PAYMENT_REFUND', eventId, correlationId);
+        break;
+      }
 
-        await this.db.saveSagaInstance({
-          sagaId: saga.saga_id,
-          aggregateId: orderId,
-          sagaType: saga.saga_type,
-          state: 'CANCELLED',
-          currentStep: 'TERMINAL_CANCELLED',
-          correlationId,
-          context: updatedContext,
-        });
-
-        // Emit OrderCancelled
-        await this.emit({
-          topic: topics.orders.name,
-          eventType: EventTypes.OrderCancelled,
-          aggregateId: orderId,
-          aggregateType: 'Order',
-          correlationId,
-          causationId: eventId,
-          payload: {
-            order_id: orderId,
-            user_id: (context.user_id as string) || 'unknown',
-            reason: saga.failure_reason || 'Order cancelled after compensation',
-            cancelled_at: new Date().toISOString(),
-            compensated_steps: compensations,
-          },
-        });
+      // Compensation Barrier Resolver 2: Inventory Released
+      case EventTypes.InventoryReleased: {
+        // Only process as compensation resolver if saga is in COMPENSATING state
+        if (saga && saga.state === 'COMPENSATING') {
+          await this.handleCompensationCompletion(saga, context, 'INVENTORY_RELEASE', eventId, correlationId);
+        }
         break;
       }
 
       default:
         break;
+    }
+  }
+
+  /**
+   * Helper that evaluates the Compensation Barrier:
+   * Only transitions the Saga to CANCELLED once ALL required compensations have completed.
+   */
+  private async handleCompensationCompletion(
+    saga: any,
+    context: SagaContext,
+    completedAction: string,
+    eventId: string,
+    correlationId: string
+  ): Promise<void> {
+    const orderId = saga.aggregate_id || saga.aggregateId || (context.order_id as string);
+    const sagaId = saga.saga_id || saga.sagaId || `saga_${orderId}`;
+    const sagaType = saga.saga_type || saga.sagaType || 'ORDER_FULFILLMENT';
+    const failureReason = saga.failure_reason || saga.failureReason;
+
+    const completedList: string[] = Array.isArray(context.compensations_completed)
+      ? [...context.compensations_completed]
+      : [];
+
+    if (!completedList.includes(completedAction)) {
+      completedList.push(completedAction);
+    }
+
+    const pendingList: string[] = Array.isArray(context.compensations_pending)
+      ? context.compensations_pending
+      : ['PAYMENT_REFUND'];
+
+    const allCompensationsCompleted = pendingList.every((action) => completedList.includes(action));
+    const updatedContext: SagaContext = {
+      ...context,
+      compensations_completed: completedList,
+    };
+
+    if (allCompensationsCompleted) {
+      logger.info({
+        event: 'saga.compensation_completed',
+        order_id: orderId,
+        all_completed: completedList,
+        pending: pendingList,
+      });
+
+      await this.db.saveSagaInstance({
+        sagaId,
+        aggregateId: orderId,
+        sagaType,
+        state: 'CANCELLED',
+        currentStep: 'TERMINAL_CANCELLED',
+        correlationId,
+        context: updatedContext,
+        failureReason,
+      });
+
+      // Emit OrderCancelled only once barrier is fully satisfied
+      await this.emit({
+        topic: topics.orders.name,
+        eventType: EventTypes.OrderCancelled,
+        aggregateId: orderId,
+        aggregateType: 'Order',
+        correlationId,
+        causationId: eventId,
+        payload: {
+          order_id: orderId,
+          user_id: (context.user_id as string) || 'unknown',
+          reason: failureReason || 'Order cancelled after full compensation',
+          cancelled_at: new Date().toISOString(),
+          compensated_steps: completedList,
+        },
+      });
+    } else {
+      logger.info({
+        event: 'saga.compensation_waiting',
+        order_id: orderId,
+        completed_so_far: completedList,
+        still_pending: pendingList.filter((p) => !completedList.includes(p)),
+      });
+
+      await this.db.saveSagaInstance({
+        sagaId,
+        aggregateId: orderId,
+        sagaType,
+        state: 'COMPENSATING',
+        currentStep: `COMPENSATING_WAITING_${completedAction}`,
+        correlationId,
+        context: updatedContext,
+        failureReason,
+      });
     }
   }
 }

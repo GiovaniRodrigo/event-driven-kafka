@@ -3,10 +3,13 @@ import { kafkaConfig, producerConfig } from '../../config';
 import { DatabaseService, OutboxEventRow } from '../../services/database';
 import { logger } from '../../utils/logger';
 import { EventEnvelope } from '../../contracts/envelope';
+import { v4 as uuidv4 } from 'uuid';
 
 export interface OutboxRelayOptions {
   batchSize?: number;
   pollIntervalMs?: number;
+  workerId?: string;
+  leaseDurationSeconds?: number;
 }
 
 export class OutboxRelay {
@@ -17,6 +20,8 @@ export class OutboxRelay {
   private isProcessing = false;
   private batchSize: number;
   private pollIntervalMs: number;
+  public readonly workerId: string;
+  public readonly leaseDurationSeconds: number;
 
   constructor(
     private db: DatabaseService,
@@ -24,6 +29,8 @@ export class OutboxRelay {
   ) {
     this.batchSize = options.batchSize || 50;
     this.pollIntervalMs = options.pollIntervalMs || 150;
+    this.workerId = options.workerId || `relay_${uuidv4().slice(0, 8)}`;
+    this.leaseDurationSeconds = options.leaseDurationSeconds || 30;
     this.kafka = new Kafka(kafkaConfig);
     this.producer = this.kafka.producer(producerConfig);
   }
@@ -33,7 +40,13 @@ export class OutboxRelay {
 
     await this.producer.connect();
     this.isRunning = true;
-    logger.info({ event: 'outbox_relay_started', pollIntervalMs: this.pollIntervalMs, batchSize: this.batchSize });
+    logger.info({
+      event: 'outbox_relay_started',
+      worker_id: this.workerId,
+      poll_interval_ms: this.pollIntervalMs,
+      batch_size: this.batchSize,
+      lease_duration_sec: this.leaseDurationSeconds,
+    });
 
     this.schedulePoll();
   }
@@ -44,7 +57,7 @@ export class OutboxRelay {
       clearTimeout(this.pollTimer);
     }
     await this.producer.disconnect();
-    logger.info({ event: 'outbox_relay_stopped' });
+    logger.info({ event: 'outbox_relay_stopped', worker_id: this.workerId });
   }
 
   /**
@@ -64,6 +77,7 @@ export class OutboxRelay {
       } catch (error) {
         logger.error({
           event: 'outbox_poll_error',
+          worker_id: this.workerId,
           error: error instanceof Error ? error.message : 'Unknown error',
         });
       } finally {
@@ -78,11 +92,22 @@ export class OutboxRelay {
 
     let processedCount = 0;
     try {
-      const pendingEvents = await this.db.getPendingOutboxEvents(this.batchSize);
+      const pendingEvents = await this.db.getPendingOutboxEvents(
+        this.batchSize,
+        this.workerId,
+        this.leaseDurationSeconds
+      );
       if (pendingEvents.length === 0) {
         this.isProcessing = false;
         return 0;
       }
+
+      logger.info({
+        event: 'outbox.claimed',
+        worker_id: this.workerId,
+        count: pendingEvents.length,
+        event_ids: pendingEvents.map((e) => e.id),
+      });
 
       for (const event of pendingEvents) {
         await this.publishEvent(event);
@@ -105,7 +130,7 @@ export class OutboxRelay {
         aggregate_id: event.aggregate_id,
         aggregate_type: event.aggregate_type,
         occurred_at: event.created_at.toISOString(),
-        producer: 'outbox-relay',
+        producer: `outbox-relay-${this.workerId}`,
         correlation_id: event.correlation_id,
         causation_id: event.causation_id,
         schema_version: 1,
@@ -124,21 +149,23 @@ export class OutboxRelay {
               'event-id': event.id,
               'event-type': event.event_type,
               'source-service': 'outbox-relay',
+              'worker-id': this.workerId,
               timestamp: new Date().toISOString(),
             },
           },
         ],
       });
 
-      await this.db.markOutboxEventPublished(event.id);
+      await this.db.markOutboxEventPublished(event.id, this.workerId);
 
       const duration = Date.now() - startTime;
       logger.info({
-        event: 'outbox_event_published',
+        event: 'outbox.published',
         event_id: event.id,
         aggregate_id: event.aggregate_id,
         topic: event.topic,
         event_type: event.event_type,
+        worker_id: this.workerId,
         partition: result[0]?.partition,
         offset: result[0]?.offset,
         duration_ms: duration,
@@ -146,14 +173,15 @@ export class OutboxRelay {
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error({
-        event: 'outbox_publish_error',
+        event: 'outbox.publish_error',
         event_id: event.id,
         aggregate_id: event.aggregate_id,
         topic: event.topic,
+        worker_id: this.workerId,
         error: errorMsg,
       });
 
-      await this.db.markOutboxEventFailed(event.id, errorMsg);
+      await this.db.markOutboxEventFailed(event.id, errorMsg, this.workerId);
     }
   }
 }

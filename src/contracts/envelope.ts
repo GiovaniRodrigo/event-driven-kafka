@@ -8,6 +8,7 @@ export const EventEnvelopeSchema = z.object({
   event_id: z.string().uuid().or(z.string().min(1)),
   event_type: z.string().min(1),
   event_version: z.number().int().positive().default(1),
+  sequence_number: z.number().int().positive().optional(),
   aggregate_id: z.string().min(1),
   aggregate_type: z.string().min(1),
   occurred_at: z.string().datetime().or(z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)),
@@ -29,6 +30,7 @@ export function createEventEnvelope<T extends Record<string, unknown>>(params: {
   eventId?: string;
   eventType: string;
   eventVersion?: number;
+  sequenceNumber?: number;
   aggregateId: string;
   aggregateType: string;
   occurredAt?: string;
@@ -43,6 +45,7 @@ export function createEventEnvelope<T extends Record<string, unknown>>(params: {
     event_id: params.eventId || `evt_${crypto.randomUUID()}`,
     event_type: params.eventType,
     event_version: params.eventVersion || 1,
+    sequence_number: params.sequenceNumber,
     aggregate_id: params.aggregateId,
     aggregate_type: params.aggregateType,
     occurred_at: now,

@@ -1,8 +1,8 @@
 # 06. Saga Pattern & Distributed Transactions
 
-**Version:** 1.0.0  
+**Version:** 1.1.0  
 **Author:** Giovani Rodrigo  
-**Status:** IMPLEMENTED  
+**Status:** IMPLEMENTED & PRODUCTION HARDENED  
 
 ---
 
@@ -38,7 +38,7 @@ stateDiagram-v2
     SHIPPING_PENDING --> COMPLETED: ShipmentCreated
     SHIPPING_PENDING --> COMPENSATING: ShipmentFailed (Release Stock + Refund Payment)
     
-    COMPENSATING --> CANCELLED: PaymentRefunded & InventoryReleased
+    COMPENSATING --> CANCELLED: Compensation Barrier Satisfied (All Steps Complete)
     COMPLETED --> [*]
     CANCELLED --> [*]
     FAILED --> [*]
@@ -58,7 +58,19 @@ stateDiagram-v2
 
 ---
 
-## 4. Persistent State Schema: `saga_instances`
+## 4. Compensation Barrier Semantics
+
+When multi-step compensation occurs (such as in `FraudRejected` or `ShipmentFailed`), the orchestrator emits both `InventoryReleased` and `PaymentRefundRequested`.
+
+Because Kafka partitions are decoupled, compensation responses may arrive in any order (`PaymentRefunded` before `InventoryReleased`, or vice-versa). The orchestrator maintains:
+* `compensations_pending: ['INVENTORY_RELEASE', 'PAYMENT_REFUND']`
+* `compensations_completed: []`
+
+The transition to `CANCELLED` and emission of `OrderCancelled` occurs **only** when all pending compensations have completed. Partial completions maintain the saga in `COMPENSATING` state.
+
+---
+
+## 5. Persistent State Schema: `saga_instances`
 
 ```sql
 CREATE TABLE saga_instances (

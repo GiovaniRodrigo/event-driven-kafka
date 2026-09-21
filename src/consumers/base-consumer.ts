@@ -200,7 +200,7 @@ export abstract class BaseConsumer {
     const alreadyProcessed = await this.db.isEventProcessed(eventId, this.consumerName);
     if (alreadyProcessed) {
       logger.info({
-        event: 'duplicate_event_skipped',
+        event: 'consumer.duplicate',
         consumer: this.consumerName,
         event_id: eventId,
         event_type: eventType,
@@ -217,6 +217,15 @@ export abstract class BaseConsumer {
     while (attempt < this.maxRetries) {
       attempt++;
       try {
+        if (attempt > 1) {
+          logger.info({
+            event: 'consumer.redelivery',
+            consumer: this.consumerName,
+            event_id: eventId,
+            attempt,
+          });
+        }
+
         await this.processEvent(envelope);
 
         // Mark successfully processed in database
@@ -309,12 +318,16 @@ export abstract class BaseConsumer {
         payload: dlqPayload,
       });
 
+      logger.info({ event: 'dlq.persisted', dlq_id: dlqId, reason: 'NON_RETRYABLE' });
+
       await this.producer.send({
         topic: topics.dlq.name,
         messages: [{ key: dlqId, value: JSON.stringify(dlqPayload) }],
       });
+
+      logger.info({ event: 'dlq.published', dlq_id: dlqId, topic: topics.dlq.name });
     } catch (dlqError) {
-      logger.error({ event: 'dlq_save_error', error: (dlqError as Error).message });
+      logger.error({ event: 'dlq.save_error', error: (dlqError as Error).message });
     }
   }
 
@@ -351,7 +364,7 @@ export abstract class BaseConsumer {
     });
 
     try {
-      // Record in PostgreSQL DLQ table
+      // 1. Record in PostgreSQL DLQ table (durably persisted)
       await this.db.recordDLQMessage({
         id: dlqId,
         eventId: params.envelope.event_id,
@@ -365,10 +378,12 @@ export abstract class BaseConsumer {
         correlationId: params.envelope.correlation_id,
       });
 
-      // Mark processed as FAILED in idempotency table so it doesn't block
+      logger.info({ event: 'dlq.persisted', dlq_id: dlqId, event_id: params.envelope.event_id });
+
+      // 2. Mark processed as FAILED in idempotency table so it advances the offset
       await this.db.markEventProcessed(params.envelope.event_id, this.consumerName, 'FAILED', params.error.message);
 
-      // Publish to Kafka platform.dlq topic
+      // 3. Publish to Kafka platform.dlq topic
       await this.producer.send({
         topic: topics.dlq.name,
         messages: [
@@ -384,8 +399,10 @@ export abstract class BaseConsumer {
           },
         ],
       });
+
+      logger.info({ event: 'dlq.published', dlq_id: dlqId, topic: topics.dlq.name });
     } catch (dlqErr) {
-      logger.error({ event: 'dlq_publish_error', error: (dlqErr as Error).message });
+      logger.error({ event: 'dlq.publish_error', error: (dlqErr as Error).message });
       throw dlqErr;
     }
   }

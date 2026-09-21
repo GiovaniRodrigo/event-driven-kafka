@@ -14,9 +14,12 @@ export interface OutboxEventRow {
   correlation_id: string;
   causation_id: string;
   topic: string;
-  status: 'PENDING' | 'PUBLISHED' | 'FAILED';
+  status: 'PENDING' | 'PROCESSING' | 'PUBLISHED' | 'FAILED';
   attempts: number;
   last_error?: string;
+  lease_owner?: string;
+  leased_at?: Date;
+  lease_expires_at?: Date;
   created_at: Date;
   published_at?: Date;
 }
@@ -46,7 +49,7 @@ export interface DLQMessageRow {
   payload: Record<string, unknown>;
   correlation_id?: string;
   attempts: number;
-  status: 'UNRESOLVED' | 'REPLAYED' | 'DISCARDED';
+  status: 'UNRESOLVED' | 'REPLAYING' | 'REPLAYED' | 'DISCARDED';
   failed_at: Date;
   resolved_at?: Date;
 }
@@ -130,7 +133,7 @@ export class DatabaseService {
         );
       `);
 
-      // 2. Transactional Outbox Table
+      // 2. Transactional Outbox Table with Explicit Leases
       await client.query(`
         CREATE TABLE IF NOT EXISTS outbox_events (
           id VARCHAR(100) PRIMARY KEY,
@@ -145,12 +148,17 @@ export class DatabaseService {
           status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
           attempts INT NOT NULL DEFAULT 0,
           last_error TEXT,
+          lease_owner VARCHAR(100),
+          leased_at TIMESTAMP,
+          lease_expires_at TIMESTAMP,
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           published_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_outbox_pending
-        ON outbox_events (status, created_at)
-        WHERE status = 'PENDING';
+        ON outbox_events (status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_outbox_lease
+        ON outbox_events (lease_expires_at)
+        WHERE status = 'PROCESSING';
       `);
 
       // 3. Robust Idempotent Consumer Processed Events Table
@@ -187,7 +195,7 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_saga_state ON saga_instances (state);
       `);
 
-      // 5. Immutable Event Store (Event Sourcing & Audit Log)
+      // 5. Immutable Event Store with Explicit Sequence Ordering
       await client.query(`
         CREATE TABLE IF NOT EXISTS event_store (
           id SERIAL PRIMARY KEY,
@@ -196,14 +204,16 @@ export class DatabaseService {
           aggregate_type VARCHAR(50) NOT NULL,
           event_type VARCHAR(100) NOT NULL,
           event_version INT NOT NULL DEFAULT 1,
+          sequence_number INT NOT NULL DEFAULT 1,
           payload JSONB NOT NULL,
           correlation_id VARCHAR(100) NOT NULL,
           causation_id VARCHAR(100) NOT NULL,
           producer VARCHAR(100) NOT NULL,
           occurred_at TIMESTAMP NOT NULL,
-          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT uq_event_store_aggregate_seq UNIQUE (aggregate_id, sequence_number)
         );
-        CREATE INDEX IF NOT EXISTS idx_event_store_aggregate ON event_store (aggregate_id, occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_event_store_aggregate ON event_store (aggregate_id, sequence_number);
         CREATE INDEX IF NOT EXISTS idx_event_store_correlation ON event_store (correlation_id);
 
         -- Strict immutability protection trigger: forbids UPDATE and DELETE on event_store
@@ -220,7 +230,19 @@ export class DatabaseService {
         FOR EACH ROW EXECUTE FUNCTION prevent_event_store_mutation();
       `);
 
-      // 6. CQRS Read Models
+      // 6. Projection Idempotency Log (Prevents double incremental mutations)
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS projection_applied_events (
+          projection_name VARCHAR(100) NOT NULL,
+          event_id VARCHAR(100) NOT NULL,
+          aggregate_id VARCHAR(100) NOT NULL,
+          applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (projection_name, event_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_proj_applied_agg ON projection_applied_events (aggregate_id);
+      `);
+
+      // 7. CQRS Read Models
       await client.query(`
         CREATE TABLE IF NOT EXISTS order_read_model (
           order_id VARCHAR(100) PRIMARY KEY,
@@ -286,7 +308,7 @@ export class DatabaseService {
         ON CONFLICT (sku) DO NOTHING;
       `);
 
-      // 7. Dead Letter Queue Table
+      // 8. Dead Letter Queue Table
       await client.query(`
         CREATE TABLE IF NOT EXISTS dlq_messages (
           id VARCHAR(100) PRIMARY KEY,
@@ -307,7 +329,7 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_dlq_status ON dlq_messages (status);
       `);
 
-      // 8. Legacy / Timeline Order Events compatibility table
+      // 9. Legacy / Timeline Order Events compatibility table
       await client.query(`
         CREATE TABLE IF NOT EXISTS order_events (
           id SERIAL PRIMARY KEY,
@@ -319,7 +341,7 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events (order_id, created_at);
       `);
 
-      // 9. Metrics Table
+      // 10. Metrics Table
       await client.query(`
         CREATE TABLE IF NOT EXISTS metrics (
           id SERIAL PRIMARY KEY,
@@ -336,7 +358,7 @@ export class DatabaseService {
     }
   }
 
-  // --- OUTBOX METHODS ---
+  // --- OUTBOX METHODS WITH LEASES ---
 
   async insertOutboxEvent(
     event: {
@@ -378,14 +400,23 @@ export class DatabaseService {
     }
   }
 
-  async getPendingOutboxEvents(limit = 50, client?: PoolClient): Promise<OutboxEventRow[]> {
-    // Atomic lease: claims pending events and marks them PROCESSING so concurrent workers cannot double-pick
+  async getPendingOutboxEvents(
+    limit = 50,
+    workerId = 'default-worker',
+    leaseDurationSeconds = 30,
+    client?: PoolClient
+  ): Promise<OutboxEventRow[]> {
+    // Atomic lease acquisition: claims pending/expired events and marks them PROCESSING with worker lease
     const query = `
       UPDATE outbox_events
-      SET status = 'PROCESSING'
+      SET status = 'PROCESSING',
+          lease_owner = $2,
+          leased_at = CURRENT_TIMESTAMP,
+          lease_expires_at = CURRENT_TIMESTAMP + ($3 || ' seconds')::INTERVAL,
+          attempts = attempts + 1
       WHERE id IN (
         SELECT id FROM outbox_events
-        WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND created_at < NOW() - INTERVAL '5 minutes'))
+        WHERE (status = 'PENDING' OR (status = 'PROCESSING' AND (lease_expires_at IS NULL OR lease_expires_at < CURRENT_TIMESTAMP)))
           AND attempts < 10
         ORDER BY created_at ASC
         LIMIT $1
@@ -394,7 +425,7 @@ export class DatabaseService {
       RETURNING *;
     `;
     const runner = client || this.pool;
-    const result = await runner.query(query, [limit]);
+    const result = await runner.query(query, [limit, workerId, leaseDurationSeconds]);
     return result.rows.map((r) => ({
       id: r.id,
       aggregate_id: r.aggregate_id,
@@ -408,26 +439,34 @@ export class DatabaseService {
       status: r.status,
       attempts: r.attempts,
       last_error: r.last_error,
+      lease_owner: r.lease_owner,
+      leased_at: r.leased_at ? new Date(r.leased_at) : undefined,
+      lease_expires_at: r.lease_expires_at ? new Date(r.lease_expires_at) : undefined,
       created_at: new Date(r.created_at),
       published_at: r.published_at ? new Date(r.published_at) : undefined,
     }));
   }
 
-  async markOutboxEventPublished(id: string, client?: PoolClient): Promise<void> {
+  async markOutboxEventPublished(id: string, workerId?: string, client?: PoolClient): Promise<void> {
     const query = `
       UPDATE outbox_events
-      SET status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP
+      SET status = 'PUBLISHED',
+          published_at = CURRENT_TIMESTAMP,
+          lease_owner = NULL,
+          lease_expires_at = NULL
       WHERE id = $1
     `;
     const runner = client || this.pool;
     await runner.query(query, [id]);
   }
 
-  async markOutboxEventFailed(id: string, error: string, client?: PoolClient): Promise<void> {
+  async markOutboxEventFailed(id: string, error: string, workerId?: string, client?: PoolClient): Promise<void> {
     const query = `
       UPDATE outbox_events
-      SET attempts = attempts + 1, last_error = $2,
-          status = CASE WHEN attempts + 1 >= 10 THEN 'FAILED' ELSE 'PENDING' END
+      SET last_error = $2,
+          lease_owner = NULL,
+          lease_expires_at = NULL,
+          status = CASE WHEN attempts >= 10 THEN 'FAILED' ELSE 'PENDING' END
       WHERE id = $1
     `;
     const runner = client || this.pool;
@@ -480,6 +519,41 @@ export class DatabaseService {
   /** Legacy helper for backward compatibility */
   async markProcessed(eventId: string): Promise<void> {
     await this.markEventProcessed(eventId, 'default-consumer');
+  }
+
+  // --- PROJECTION IDEMPOTENCY LOG ---
+
+  async isProjectionEventApplied(projectionName: string, eventId: string, client?: PoolClient): Promise<boolean> {
+    const query = `
+      SELECT 1 FROM projection_applied_events
+      WHERE projection_name = $1 AND event_id = $2
+    `;
+    const runner = client || this.pool;
+    const result = await runner.query(query, [projectionName, eventId]);
+    return result.rows.length > 0;
+  }
+
+  async markProjectionEventApplied(
+    projectionName: string,
+    eventId: string,
+    aggregateId: string,
+    client?: PoolClient
+  ): Promise<void> {
+    const query = `
+      INSERT INTO projection_applied_events (projection_name, event_id, aggregate_id, applied_at)
+      VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+      ON CONFLICT (projection_name, event_id) DO NOTHING
+    `;
+    const runner = client || this.pool;
+    await runner.query(query, [projectionName, eventId, aggregateId]);
+  }
+
+  async resetReadModelForAggregate(aggregateId: string, client?: PoolClient): Promise<void> {
+    const runner = client || this.pool;
+    await runner.query('DELETE FROM order_read_model WHERE order_id = $1', [aggregateId]);
+    await runner.query('DELETE FROM payment_read_model WHERE order_id = $1', [aggregateId]);
+    await runner.query('DELETE FROM shipment_read_model WHERE order_id = $1', [aggregateId]);
+    await runner.query('DELETE FROM projection_applied_events WHERE aggregate_id = $1', [aggregateId]);
   }
 
   // --- SAGA INSTANCE METHODS ---
@@ -573,14 +647,18 @@ export class DatabaseService {
     }));
   }
 
-  // --- EVENT STORE METHODS ---
+  // --- EVENT STORE METHODS WITH EXPLICIT SEQUENCE ORDERING ---
 
   async appendToEventStore(event: EventEnvelope, client?: PoolClient): Promise<void> {
     const query = `
       INSERT INTO event_store (
         event_id, aggregate_id, aggregate_type, event_type, event_version,
-        payload, correlation_id, causation_id, producer, occurred_at, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        sequence_number, payload, correlation_id, causation_id, producer, occurred_at, created_at
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        COALESCE($6, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2)),
+        $7, $8, $9, $10, $11, CURRENT_TIMESTAMP
+      )
       ON CONFLICT (event_id) DO NOTHING
     `;
     const params = [
@@ -589,6 +667,7 @@ export class DatabaseService {
       event.aggregate_type,
       event.event_type,
       event.event_version,
+      event.sequence_number || null,
       JSON.stringify(event.payload),
       event.correlation_id,
       event.causation_id,
@@ -603,7 +682,7 @@ export class DatabaseService {
     const query = `
       SELECT * FROM event_store
       WHERE aggregate_id = $1
-      ORDER BY occurred_at ASC
+      ORDER BY sequence_number ASC, occurred_at ASC
     `;
     const result = await this.pool.query(query, [aggregateId]);
     return result.rows.map((r) => ({
@@ -612,6 +691,7 @@ export class DatabaseService {
       aggregate_type: r.aggregate_type,
       event_type: r.event_type,
       event_version: r.event_version,
+      sequence_number: r.sequence_number,
       payload: r.payload,
       correlation_id: r.correlation_id,
       causation_id: r.causation_id,
@@ -657,6 +737,16 @@ export class DatabaseService {
       JSON.stringify(dlq.payload),
       dlq.correlationId || null,
     ]);
+  }
+
+  async setDLQStatus(id: string, status: 'UNRESOLVED' | 'REPLAYING' | 'REPLAYED' | 'DISCARDED'): Promise<void> {
+    const query = `
+      UPDATE dlq_messages
+      SET status = $2,
+          resolved_at = CASE WHEN $2 IN ('REPLAYED', 'DISCARDED') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+      WHERE id = $1
+    `;
+    await this.pool.query(query, [id, status]);
   }
 
   async listDLQMessages(limit = 50, status = 'UNRESOLVED'): Promise<DLQMessageRow[]> {
@@ -709,12 +799,7 @@ export class DatabaseService {
   }
 
   async markDLQResolved(id: string, status: 'REPLAYED' | 'DISCARDED' = 'REPLAYED'): Promise<void> {
-    const query = `
-      UPDATE dlq_messages
-      SET status = $2, resolved_at = CURRENT_TIMESTAMP
-      WHERE id = $1
-    `;
-    await this.pool.query(query, [id, status]);
+    await this.setDLQStatus(id, status);
   }
 
   // --- ORDERS / READ MODEL METHODS ---
@@ -807,7 +892,7 @@ export class DatabaseService {
       SELECT event_type, producer, occurred_at
       FROM event_store
       WHERE aggregate_id = $1
-      ORDER BY occurred_at ASC
+      ORDER BY sequence_number ASC, occurred_at ASC
     `;
     const esResult = await this.pool.query(esQuery, [orderId]);
     if (esResult.rows.length > 0) {

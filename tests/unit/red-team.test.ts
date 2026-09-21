@@ -116,6 +116,10 @@ describe('Red Team Audit Resilience & Concurrency Verification', () => {
           status: 'UNRESOLVED',
         };
       }),
+      setDLQStatus: jest.fn().mockImplementation(async (id, status) => {
+        const found = dlqTable.find((d) => d.id === id);
+        if (found) found.status = status;
+      }),
       markDLQResolved: jest.fn().mockImplementation(async (id, status) => {
         const found = dlqTable.find((d) => d.id === id);
         if (found) found.status = status;

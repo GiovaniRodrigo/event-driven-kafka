@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS orders (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. Transactional Outbox
+-- 3. Transactional Outbox with Leases
 CREATE TABLE IF NOT EXISTS outbox_events (
   id VARCHAR(100) PRIMARY KEY,
   aggregate_id VARCHAR(100) NOT NULL,
@@ -48,10 +48,14 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
   attempts INT NOT NULL DEFAULT 0,
   last_error TEXT,
+  lease_owner VARCHAR(100),
+  leased_at TIMESTAMP,
+  lease_expires_at TIMESTAMP,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   published_at TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events (status, created_at) WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_lease ON outbox_events (lease_expires_at) WHERE status = 'PROCESSING';
 
 -- 4. Scoped Idempotency Consumer Tracking
 CREATE TABLE IF NOT EXISTS processed_events (
@@ -82,7 +86,7 @@ CREATE TABLE IF NOT EXISTS saga_instances (
 CREATE INDEX IF NOT EXISTS idx_saga_aggregate ON saga_instances (aggregate_id);
 CREATE INDEX IF NOT EXISTS idx_saga_state ON saga_instances (state);
 
--- 6. Immutable Append-Only Event Store
+-- 6. Immutable Append-Only Event Store with Explicit Sequence Ordering
 CREATE TABLE IF NOT EXISTS event_store (
   id SERIAL PRIMARY KEY,
   event_id VARCHAR(100) UNIQUE NOT NULL,
@@ -90,14 +94,16 @@ CREATE TABLE IF NOT EXISTS event_store (
   aggregate_type VARCHAR(50) NOT NULL,
   event_type VARCHAR(100) NOT NULL,
   event_version INT NOT NULL DEFAULT 1,
+  sequence_number INT NOT NULL DEFAULT 1,
   payload JSONB NOT NULL,
   correlation_id VARCHAR(100) NOT NULL,
   causation_id VARCHAR(100) NOT NULL,
   producer VARCHAR(100) NOT NULL,
   occurred_at TIMESTAMP NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_event_store_aggregate_seq UNIQUE (aggregate_id, sequence_number)
 );
-CREATE INDEX IF NOT EXISTS idx_event_store_aggregate ON event_store (aggregate_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_event_store_aggregate ON event_store (aggregate_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_event_store_correlation ON event_store (correlation_id);
 
 -- Enforce Immutability Trigger on event_store
@@ -113,7 +119,17 @@ CREATE TRIGGER trg_prevent_event_store_mutation
 BEFORE UPDATE OR DELETE ON event_store
 FOR EACH ROW EXECUTE FUNCTION prevent_event_store_mutation();
 
--- 7. CQRS Materialized Read Models
+-- 7. Projection Idempotency Log
+CREATE TABLE IF NOT EXISTS projection_applied_events (
+  projection_name VARCHAR(100) NOT NULL,
+  event_id VARCHAR(100) NOT NULL,
+  aggregate_id VARCHAR(100) NOT NULL,
+  applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (projection_name, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_proj_applied_agg ON projection_applied_events (aggregate_id);
+
+-- 8. CQRS Materialized Read Models
 CREATE TABLE IF NOT EXISTS order_read_model (
   order_id VARCHAR(100) PRIMARY KEY,
   user_id VARCHAR(100) NOT NULL,
@@ -174,7 +190,7 @@ VALUES
   ('OUT_OF_STOCK_ITEM', 'Limited Edition Collectible', 0, 0, 0)
 ON CONFLICT (sku) DO NOTHING;
 
--- 8. Dead Letter Queue Table
+-- 9. Dead Letter Queue Table
 CREATE TABLE IF NOT EXISTS dlq_messages (
   id VARCHAR(100) PRIMARY KEY,
   event_id VARCHAR(100) NOT NULL,
@@ -193,7 +209,7 @@ CREATE TABLE IF NOT EXISTS dlq_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_dlq_status ON dlq_messages (status);
 
--- 9. Metrics & Legacy Event Log
+-- 10. Metrics & Legacy Event Log
 CREATE TABLE IF NOT EXISTS order_events (
   id SERIAL PRIMARY KEY,
   order_id VARCHAR(100) NOT NULL,
