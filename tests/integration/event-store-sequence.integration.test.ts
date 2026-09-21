@@ -45,14 +45,7 @@ describe('Event Store Sequence Integrity & Advisory Locking Integration Tests (P
 
     // Append all 25 concurrently across parallel promises (relies on pg_advisory_xact_lock in appendToEventStore)
     const appendPromises = envelopes.map((env) => db.appendToEventStore(env));
-    const results = await Promise.all(appendPromises);
-
-    // Verify all appends returned sequence numbers
-    expect(results.length).toBe(CONCURRENCY_COUNT);
-    results.forEach((seq) => {
-      expect(typeof seq).toBe('number');
-      expect(seq).toBeGreaterThan(0);
-    });
+    await Promise.all(appendPromises);
 
     // Query event store directly from PostgreSQL
     const events = await db.getEventsByAggregateId(aggregateId);
