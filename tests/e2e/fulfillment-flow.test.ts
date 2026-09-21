@@ -80,6 +80,15 @@ describe('E2E Order Fulfillment Pipeline Test (In-Memory Simulator)', () => {
       }),
       isEventProcessed: jest.fn().mockImplementation(async (id, c) => processedEvents.has(`${id}:${c}`)),
       markEventProcessed: jest.fn().mockImplementation(async (id, c) => processedEvents.add(`${id}:${c}`)),
+      isProjectionEventApplied: jest.fn().mockResolvedValue(false),
+      markProjectionEventApplied: jest.fn().mockResolvedValue(undefined),
+      markOutboxEventFailed: jest.fn().mockImplementation(async (id, err) => {
+        const item = outboxTable.find((e) => e.id === id);
+        if (item) {
+          item.attempts++;
+          item.last_error = err;
+        }
+      }),
       saveSagaInstance: jest.fn().mockImplementation(async (s) => sagasTable.set(s.aggregateId, s)),
       getSagaByAggregateId: jest.fn().mockImplementation(async (id) => sagasTable.get(id) || null),
       appendToEventStore: jest.fn().mockImplementation(async (env) => eventStoreTable.push(env)),
