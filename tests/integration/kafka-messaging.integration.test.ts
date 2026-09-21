@@ -9,7 +9,8 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   let kafka: Kafka;
   let producer: Producer;
   const activeConsumers: Consumer[] = [];
-  const testTopic = `test.orders.events.${Date.now()}`;
+  const testTopic1 = `test.orders.events.${Date.now()}.1`;
+  const testTopic2 = `test.orders.events.${Date.now()}.2`;
   const dlqTopic = `test.platform.dlq.${Date.now()}`;
 
   beforeAll(async () => {
@@ -19,7 +20,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       logLevel: logLevel.NOTHING,
       connectionTimeout: 10000,
       requestTimeout: 25000,
-      retry: { retries: 10, initialRetryTime: 500, maxRetryTime: 3000 },
+      retry: { retries: 10, initialRetryTime: 300, maxRetryTime: 2000 },
     });
 
     // Fails loudly if Kafka broker is unavailable
@@ -27,7 +28,8 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     await admin.connect();
     await admin.createTopics({
       topics: [
-        { topic: testTopic, numPartitions: 1, replicationFactor: 1 },
+        { topic: testTopic1, numPartitions: 1, replicationFactor: 1 },
+        { topic: testTopic2, numPartitions: 1, replicationFactor: 1 },
         { topic: dlqTopic, numPartitions: 1, replicationFactor: 1 },
       ],
     });
@@ -71,13 +73,12 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     const groupId = `test-group-${Date.now()}`;
     const consumer = kafka.consumer({
       groupId,
-      retry: { retries: 10, initialRetryTime: 500 },
-      sessionTimeout: 15000,
+      retry: { retries: 10, initialRetryTime: 300 },
     });
     activeConsumers.push(consumer);
 
     await consumer.connect();
-    await consumer.subscribe({ topic: testTopic, fromBeginning: true });
+    await consumer.subscribe({ topic: testTopic1, fromBeginning: true });
 
     let resolveMessage: () => void;
     const messagePromise = new Promise<void>((resolve) => {
@@ -95,7 +96,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     // Produce message
     await producer.send({
-      topic: testTopic,
+      topic: testTopic1,
       messages: [{ key: orderId, value: JSON.stringify(envelope) }],
     });
 
@@ -125,13 +126,12 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     const groupId = `test-restart-group-${Date.now()}`;
     const consumerInstance1 = kafka.consumer({
       groupId,
-      retry: { retries: 10, initialRetryTime: 500 },
-      sessionTimeout: 15000,
+      retry: { retries: 10, initialRetryTime: 300 },
     });
     activeConsumers.push(consumerInstance1);
 
     await consumerInstance1.connect();
-    await consumerInstance1.subscribe({ topic: testTopic, fromBeginning: false });
+    await consumerInstance1.subscribe({ topic: testTopic2, fromBeginning: true });
 
     const receivedBatch1: any[] = [];
     let resolveBatch1: () => void;
@@ -141,6 +141,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     await consumerInstance1.run({
       autoCommit: true,
+      autoCommitInterval: 100,
       eachMessage: async ({ message }) => {
         if (message.value) {
           receivedBatch1.push(JSON.parse(message.value.toString()));
@@ -151,12 +152,15 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     // Send message 1
     await producer.send({
-      topic: testTopic,
+      topic: testTopic2,
       messages: [{ key: orderId, value: JSON.stringify(envelope) }],
     });
 
     await batch1Promise;
     expect(receivedBatch1.length).toBe(1);
+
+    // Wait for autoCommit to persist offset
+    await new Promise((r) => setTimeout(r, 600));
 
     // Stop consumer 1 (simulated crash / restart)
     await consumerInstance1.stop();
@@ -166,13 +170,12 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     const receivedBatch2: any[] = [];
     const consumerInstance2 = kafka.consumer({
       groupId,
-      retry: { retries: 10, initialRetryTime: 500 },
-      sessionTimeout: 15000,
+      retry: { retries: 10, initialRetryTime: 300 },
     });
     activeConsumers.push(consumerInstance2);
 
     await consumerInstance2.connect();
-    await consumerInstance2.subscribe({ topic: testTopic, fromBeginning: false });
+    await consumerInstance2.subscribe({ topic: testTopic2, fromBeginning: true });
 
     await consumerInstance2.run({
       autoCommit: true,
@@ -183,8 +186,8 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       },
     });
 
-    // Wait 1 second to confirm no duplicate replay of committed message 1
-    await new Promise((r) => setTimeout(r, 1000));
+    // Wait 1.5 seconds to confirm no duplicate replay of committed message 1
+    await new Promise((r) => setTimeout(r, 1500));
     expect(receivedBatch2.length).toBe(0);
 
     await consumerInstance2.stop();
