@@ -1,4 +1,4 @@
-import { Kafka, Producer, Consumer } from 'kafkajs';
+import { Kafka, Producer, Consumer, logLevel } from 'kafkajs';
 import { createEventEnvelope } from '../../src/contracts/envelope';
 import { EventTypes } from '../../src/contracts';
 
@@ -6,7 +6,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   const kafkaBroker = process.env.KAFKA_BROKER || 'localhost:9092';
   let kafka: Kafka;
   let producer: Producer;
-  let consumer: Consumer;
+  const activeConsumers: Consumer[] = [];
   const testTopic = `test.orders.events.${Date.now()}`;
   const dlqTopic = `test.platform.dlq.${Date.now()}`;
 
@@ -14,7 +14,8 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     kafka = new Kafka({
       clientId: `kafka-test-client-${Date.now()}`,
       brokers: [kafkaBroker],
-      retry: { retries: 2, initialRetryTime: 300 },
+      logLevel: logLevel.ERROR,
+      retry: { retries: 3, initialRetryTime: 300 },
     });
 
     // Fails loudly if Kafka broker is unavailable
@@ -33,11 +34,20 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   });
 
   afterAll(async () => {
-    if (consumer) {
-      await consumer.disconnect().catch(() => {});
+    for (const c of activeConsumers) {
+      try {
+        await c.stop();
+        await c.disconnect();
+      } catch {
+        // Ignored on cleanup
+      }
     }
     if (producer) {
-      await producer.disconnect().catch(() => {});
+      try {
+        await producer.disconnect();
+      } catch {
+        // Ignored on cleanup
+      }
     }
   });
 
@@ -55,19 +65,24 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     const receivedMessages: any[] = [];
     const groupId = `test-group-${Date.now()}`;
-    consumer = kafka.consumer({ groupId });
+    const consumer = kafka.consumer({ groupId });
+    activeConsumers.push(consumer);
+
     await consumer.connect();
     await consumer.subscribe({ topic: testTopic, fromBeginning: true });
 
+    let resolveMessage: () => void;
     const messagePromise = new Promise<void>((resolve) => {
-      consumer.run({
-        eachMessage: async ({ message }) => {
-          if (message.value) {
-            receivedMessages.push(JSON.parse(message.value.toString()));
-            resolve();
-          }
-        },
-      });
+      resolveMessage = resolve;
+    });
+
+    await consumer.run({
+      eachMessage: async ({ message }) => {
+        if (message.value) {
+          receivedMessages.push(JSON.parse(message.value.toString()));
+          resolveMessage();
+        }
+      },
     });
 
     // Produce message
@@ -82,6 +97,9 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     const matched = receivedMessages.find((m) => m.aggregate_id === orderId);
     expect(matched).toBeDefined();
     expect(matched.event_type).toBe(EventTypes.OrderCreated);
+
+    await consumer.stop();
+    await consumer.disconnect();
   });
 
   it('verifies consumer restart and offset resumption without duplicate processing of committed offsets', async () => {
@@ -97,9 +115,11 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     });
 
     const groupId = `test-restart-group-${Date.now()}`;
-    let consumerInstance = kafka.consumer({ groupId });
-    await consumerInstance.connect();
-    await consumerInstance.subscribe({ topic: testTopic, fromBeginning: false });
+    const consumerInstance1 = kafka.consumer({ groupId });
+    activeConsumers.push(consumerInstance1);
+
+    await consumerInstance1.connect();
+    await consumerInstance1.subscribe({ topic: testTopic, fromBeginning: false });
 
     const receivedBatch1: any[] = [];
     let resolveBatch1: () => void;
@@ -107,7 +127,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       resolveBatch1 = res;
     });
 
-    await consumerInstance.run({
+    await consumerInstance1.run({
       autoCommit: true,
       eachMessage: async ({ message }) => {
         if (message.value) {
@@ -127,15 +147,18 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     expect(receivedBatch1.length).toBe(1);
 
     // Stop consumer 1 (simulated crash / restart)
-    await consumerInstance.disconnect();
+    await consumerInstance1.stop();
+    await consumerInstance1.disconnect();
 
     // Start consumer 2 with same groupId
     const receivedBatch2: any[] = [];
-    consumerInstance = kafka.consumer({ groupId });
-    await consumerInstance.connect();
-    await consumerInstance.subscribe({ topic: testTopic, fromBeginning: false });
+    const consumerInstance2 = kafka.consumer({ groupId });
+    activeConsumers.push(consumerInstance2);
 
-    await consumerInstance.run({
+    await consumerInstance2.connect();
+    await consumerInstance2.subscribe({ topic: testTopic, fromBeginning: false });
+
+    await consumerInstance2.run({
       autoCommit: true,
       eachMessage: async ({ message }) => {
         if (message.value) {
@@ -148,6 +171,7 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     await new Promise((r) => setTimeout(r, 1000));
     expect(receivedBatch2.length).toBe(0);
 
-    await consumerInstance.disconnect();
+    await consumerInstance2.stop();
+    await consumerInstance2.disconnect();
   });
 });

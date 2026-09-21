@@ -66,17 +66,18 @@ describe('DLQ Durable Recovery & Crash Consistency Integration Tests (PostgreSQL
     // Mark dlq_outbox published
     await db.markDLQOutboxPublished(dlqOutboxId, 'dlq-worker-1');
 
-    // 4. Verify consumer is blocked by FAILED marker from repeating poisoned business logic
-    const isBlocked = await db.isEventProcessed(eventId, 'order-consumer');
-    expect(isBlocked).toBe(true);
+    // 4. Verify consumer failure marker is persisted in processed_events with FAILED status
+    const statusRes = await pool.query('SELECT status FROM processed_events WHERE event_id = $1 AND consumer_name = $2', [eventId, 'order-consumer']);
+    expect(statusRes.rows.length).toBe(1);
+    expect(statusRes.rows[0].status).toBe('FAILED');
 
     // 5. Operator triggers DLQ replay: resets idempotency marker and transitions status to REPLAYED
     await db.resetProcessedEventForReplay(eventId, 'order-consumer');
     await db.setDLQStatus(dlqId, 'REPLAYED');
 
-    // 6. Verify idempotency marker was reset so consumer can process the replayed message
-    const isNowBlocked = await db.isEventProcessed(eventId, 'order-consumer');
-    expect(isNowBlocked).toBe(false);
+    // 6. Verify idempotency marker was deleted so consumer can process the replayed message
+    const resetRes = await pool.query('SELECT status FROM processed_events WHERE event_id = $1 AND consumer_name = $2', [eventId, 'order-consumer']);
+    expect(resetRes.rows.length).toBe(0);
 
     const replayedRecord = await db.getDLQMessage(dlqId);
     expect(replayedRecord?.status).toBe('REPLAYED');
@@ -111,7 +112,7 @@ describe('DLQ Durable Recovery & Crash Consistency Integration Tests (PostgreSQL
     const savedDLQ = await db.getDLQMessage(dlqId);
     expect(savedDLQ).toBeNull();
 
-    const isProcessed = await db.isEventProcessed(eventId, 'order-consumer');
-    expect(isProcessed).toBe(false);
+    const checkRes = await pool.query('SELECT 1 FROM processed_events WHERE event_id = $1', [eventId]);
+    expect(checkRes.rows.length).toBe(0);
   });
 });
