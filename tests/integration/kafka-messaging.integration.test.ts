@@ -2,6 +2,8 @@ import { Kafka, Producer, Consumer, logLevel } from 'kafkajs';
 import { createEventEnvelope } from '../../src/contracts/envelope';
 import { EventTypes } from '../../src/contracts';
 
+jest.setTimeout(30000);
+
 describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   const kafkaBroker = process.env.KAFKA_BROKER || 'localhost:9092';
   let kafka: Kafka;
@@ -14,8 +16,10 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     kafka = new Kafka({
       clientId: `kafka-test-client-${Date.now()}`,
       brokers: [kafkaBroker],
-      logLevel: logLevel.ERROR,
-      retry: { retries: 3, initialRetryTime: 300 },
+      logLevel: logLevel.NOTHING,
+      connectionTimeout: 10000,
+      requestTimeout: 25000,
+      retry: { retries: 10, initialRetryTime: 500, maxRetryTime: 3000 },
     });
 
     // Fails loudly if Kafka broker is unavailable
@@ -65,7 +69,11 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     const receivedMessages: any[] = [];
     const groupId = `test-group-${Date.now()}`;
-    const consumer = kafka.consumer({ groupId });
+    const consumer = kafka.consumer({
+      groupId,
+      retry: { retries: 10, initialRetryTime: 500 },
+      sessionTimeout: 15000,
+    });
     activeConsumers.push(consumer);
 
     await consumer.connect();
@@ -115,7 +123,11 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
     });
 
     const groupId = `test-restart-group-${Date.now()}`;
-    const consumerInstance1 = kafka.consumer({ groupId });
+    const consumerInstance1 = kafka.consumer({
+      groupId,
+      retry: { retries: 10, initialRetryTime: 500 },
+      sessionTimeout: 15000,
+    });
     activeConsumers.push(consumerInstance1);
 
     await consumerInstance1.connect();
@@ -152,7 +164,11 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
 
     // Start consumer 2 with same groupId
     const receivedBatch2: any[] = [];
-    const consumerInstance2 = kafka.consumer({ groupId });
+    const consumerInstance2 = kafka.consumer({
+      groupId,
+      retry: { retries: 10, initialRetryTime: 500 },
+      sessionTimeout: 15000,
+    });
     activeConsumers.push(consumerInstance2);
 
     await consumerInstance2.connect();

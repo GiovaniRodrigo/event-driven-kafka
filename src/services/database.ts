@@ -850,7 +850,7 @@ export class DatabaseService {
         ) VALUES (
           $1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::INT,
           COALESCE($6::INT, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2::VARCHAR)),
-          $7::TEXT, $8::VARCHAR, $9::VARCHAR, $10::VARCHAR, $11::TIMESTAMP, CURRENT_TIMESTAMP
+          $7::JSONB, $8::VARCHAR, $9::VARCHAR, $10::VARCHAR, $11::TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (event_id) DO NOTHING
       `;
