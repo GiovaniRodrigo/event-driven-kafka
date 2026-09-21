@@ -15,3 +15,8 @@ Default five-role vocabulary (needs-triage, needs-info, ready-for-agent, ready-f
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Git & Commits
+
+- Todos os commits deste repositório devem ser de autoria de Giovani (`Giovani Rodrigo <giovanif245@gmail.com>`).
+
