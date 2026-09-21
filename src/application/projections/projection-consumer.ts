@@ -5,6 +5,7 @@ import { EventTypes } from '../../contracts';
 import { EventEnvelope } from '../../contracts/envelope';
 import { RealtimeGateway } from '../../realtime/realtime-gateway';
 import { logger } from '../../utils/logger';
+import { PoolClient } from 'pg';
 
 export class ProjectionConsumer extends BaseConsumer {
   constructor(
@@ -36,10 +37,40 @@ export class ProjectionConsumer extends BaseConsumer {
     // 2. Also keep legacy order_events updated for timeline
     await this.db.recordEvent(orderId, eventType, envelope.producer || 'system');
 
-    // 3. Update Materialized CQRS Read Models
-    const client = await this.db.getPool().connect();
-    try {
-      await client.query('BEGIN');
+    // 3. Update Materialized CQRS Read Models idempotently
+    await this.applyHistoricalEvent(envelope);
+
+    // 4. Emit to real-time order room for timeline view (live stream only)
+    this.gateway.orderEvent(orderId, {
+      event_type: eventType,
+      topic: envelope.producer || 'unknown',
+      timestamp: occurredAt,
+      correlation_id: correlationId,
+      causation_id: envelope.causation_id,
+      payload,
+    });
+  }
+
+  /**
+   * Applies an event to the CQRS read models without emitting external side effects.
+   * Safe to call during Event Replay or live stream processing.
+   */
+  public async applyHistoricalEvent(envelope: EventEnvelope, externalClient?: PoolClient): Promise<void> {
+    const { event_type: eventType, aggregate_id: orderId, occurred_at: occurredAt, event_id: eventId } = envelope;
+    const payload = envelope.payload as Record<string, any>;
+
+    const executeInTx = async (client: PoolClient) => {
+      // Check projection-level idempotency to prevent duplicate mutations on replay
+      const alreadyApplied = await this.db.isProjectionEventApplied('order-fulfillment-projection', eventId, client);
+      if (alreadyApplied) {
+        logger.info({
+          event: 'projection_duplicate_event_skipped',
+          event_id: eventId,
+          order_id: orderId,
+          event_type: eventType,
+        });
+        return;
+      }
 
       switch (eventType) {
         case EventTypes.OrderCreated: {
@@ -61,13 +92,15 @@ export class ProjectionConsumer extends BaseConsumer {
             ]
           );
 
-          this.gateway.orderCreated({
-            order_id: orderId,
-            user_id: payload.user_id,
-            status: 'pending',
-            total_amount: payload.total_amount,
-            created_at: occurredAt,
-          });
+          if (this.gateway) {
+            this.gateway.orderCreated({
+              order_id: orderId,
+              user_id: payload.user_id,
+              status: 'pending',
+              total_amount: payload.total_amount,
+              created_at: occurredAt,
+            });
+          }
           break;
         }
 
@@ -78,7 +111,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'payment_pending', step: 'PAYMENT' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_pending', step: 'PAYMENT' });
+          }
           break;
         }
 
@@ -102,7 +137,9 @@ export class ProjectionConsumer extends BaseConsumer {
             [payload.payment_id, orderId, payload.user_id, payload.amount, payload.authorization_code, occurredAt]
           );
 
-          this.gateway.orderUpdated({ order_id: orderId, status: 'payment_approved', step: 'PAYMENT' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_approved', step: 'PAYMENT' });
+          }
           break;
         }
 
@@ -115,7 +152,21 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'payment_rejected', step: 'PAYMENT' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_rejected', step: 'PAYMENT' });
+          }
+          break;
+        }
+
+        case EventTypes.PaymentRefunded: {
+          await client.query(
+            `
+            UPDATE payment_read_model
+            SET status = 'REFUNDED', refund_id = $2, updated_at = $3
+            WHERE order_id = $1
+          `,
+            [orderId, payload.refund_id || `ref_${orderId}`, occurredAt]
+          );
           break;
         }
 
@@ -126,7 +177,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_pending', step: 'INVENTORY' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_pending', step: 'INVENTORY' });
+          }
           break;
         }
 
@@ -155,7 +208,9 @@ export class ProjectionConsumer extends BaseConsumer {
             }
           }
 
-          this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_reserved', step: 'INVENTORY' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_reserved', step: 'INVENTORY' });
+          }
           break;
         }
 
@@ -186,7 +241,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_failed', step: 'INVENTORY' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_failed', step: 'INVENTORY' });
+          }
           break;
         }
 
@@ -197,7 +254,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_pending', step: 'FRAUD' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_pending', step: 'FRAUD' });
+          }
           break;
         }
 
@@ -210,7 +269,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.fraud_check_id, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_approved', step: 'FRAUD' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_approved', step: 'FRAUD' });
+          }
           break;
         }
 
@@ -223,7 +284,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_rejected', step: 'FRAUD' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_rejected', step: 'FRAUD' });
+          }
           break;
         }
 
@@ -234,7 +297,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_pending', step: 'SHIPPING' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_pending', step: 'SHIPPING' });
+          }
           break;
         }
 
@@ -258,7 +323,9 @@ export class ProjectionConsumer extends BaseConsumer {
             [payload.shipment_id, orderId, payload.tracking_number, payload.carrier || 'FEDEX', payload.estimated_delivery, occurredAt]
           );
 
-          this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_created', step: 'SHIPPING' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_created', step: 'SHIPPING' });
+          }
           break;
         }
 
@@ -271,7 +338,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'completed' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'completed' });
+          }
           break;
         }
 
@@ -284,7 +353,9 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'cancelled' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'cancelled' });
+          }
           break;
         }
 
@@ -297,33 +368,37 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          this.gateway.orderUpdated({ order_id: orderId, status: 'failed' });
+          if (this.gateway) {
+            this.gateway.orderUpdated({ order_id: orderId, status: 'failed' });
+          }
           break;
         }
       }
 
-      await client.query('COMMIT');
-    } catch (projectionError) {
-      await client.query('ROLLBACK');
-      logger.error({
-        event: 'projection_error',
-        order_id: orderId,
-        event_type: eventType,
-        error: (projectionError as Error).message,
-      });
-      throw projectionError;
-    } finally {
-      client.release();
-    }
+      // Record in projection_applied_events within same transaction
+      await this.db.markProjectionEventApplied('order-fulfillment-projection', eventId, orderId, client);
+    };
 
-    // 4. Emit to real-time order room for timeline view
-    this.gateway.orderEvent(orderId, {
-      event_type: eventType,
-      topic: envelope.producer || 'unknown',
-      timestamp: occurredAt,
-      correlation_id: correlationId,
-      causation_id: envelope.causation_id,
-      payload,
-    });
+    if (externalClient) {
+      await executeInTx(externalClient);
+    } else {
+      const client = await this.db.getPool().connect();
+      try {
+        await client.query('BEGIN');
+        await executeInTx(client);
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        logger.error({
+          event: 'projection_error',
+          order_id: orderId,
+          event_type: eventType,
+          error: (err as Error).message,
+        });
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
   }
 }

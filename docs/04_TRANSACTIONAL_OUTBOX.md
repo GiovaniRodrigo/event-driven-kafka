@@ -1,8 +1,8 @@
 # 04. Transactional Outbox Pattern & Relay Engine
 
-**Version:** 1.0.0  
+**Version:** 1.1.0  
 **Author:** Giovani Rodrigo  
-**Status:** IMPLEMENTED  
+**Status:** IMPLEMENTED & PRODUCTION HARDENED  
 
 ---
 
@@ -44,8 +44,8 @@ sequenceDiagram
     end
     API-->>Client: 202 Accepted (order_id, correlation_id)
 
-    loop Asynchronous Polling / Trigger
-        Relay->>DB: SELECT ... FROM outbox_events WHERE status = 'PENDING' FOR UPDATE SKIP LOCKED
+    loop Asynchronous Polling with Atomic Lease
+        Relay->>DB: UPDATE outbox_events SET status = 'PROCESSING', lease_owner = $worker, lease_expires_at = NOW() + INTERVAL '30s' WHERE id IN (SELECT id ... FOR UPDATE SKIP LOCKED) RETURNING *
         Relay->>Kafka: Produce event to topic (Key = aggregate_id)
         Kafka-->>Relay: Ack (Partition, Offset)
         Relay->>DB: UPDATE outbox_events SET status = 'PUBLISHED', published_at = NOW()
@@ -68,6 +68,9 @@ CREATE TABLE outbox_events (
   causation_id VARCHAR(100) NOT NULL,
   topic VARCHAR(100) NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  lease_owner VARCHAR(100),
+  leased_at TIMESTAMP,
+  lease_expires_at TIMESTAMP,
   attempts INT NOT NULL DEFAULT 0,
   last_error TEXT,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -77,6 +80,10 @@ CREATE TABLE outbox_events (
 CREATE INDEX idx_outbox_pending
 ON outbox_events (status, created_at)
 WHERE status = 'PENDING';
+
+CREATE INDEX idx_outbox_lease_recovery
+ON outbox_events (status, lease_expires_at)
+WHERE status = 'PROCESSING';
 ```
 
 ---
@@ -86,5 +93,8 @@ WHERE status = 'PENDING';
 ### 4.1 Non-Blocking Concurrency (`FOR UPDATE SKIP LOCKED`)
 Multiple outbox relay worker processes or threads can safely run concurrently. By executing `FOR UPDATE SKIP LOCKED`, each worker locks a unique slice of pending events without blocking or contending with peer workers.
 
-### 4.2 At-Least-Once Delivery Guarantee
-If an outbox worker crashes after Kafka acknowledges the message but before updating PostgreSQL to `PUBLISHED`, the next polling iteration will redeliver the event. Downstream consumers eliminate duplicate deliveries via their **Idempotent Consumer Guards** (`processed_events`).
+### 4.2 Explicit Lease Ownership & Worker Crash Recovery
+Each batch of rows is atomically assigned to a worker (`lease_owner = workerId`) with a deterministic lease expiration (`lease_expires_at = NOW() + INTERVAL '30 seconds'`). If a worker crashes mid-batch, subsequent relay ticks automatically claim expired rows (`lease_expires_at < NOW()`).
+
+### 4.3 At-Least-Once Delivery Guarantee
+If an outbox worker crashes after Kafka acknowledges the message but before updating PostgreSQL to `PUBLISHED`, the next polling iteration will redeliver the event. Downstream consumers eliminate duplicate deliveries via their **Scoped Idempotent Consumer Guards** (`UNIQUE(event_id, consumer_name)`).
