@@ -112,6 +112,9 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
   });
 
   it('verifies consumer restart and offset resumption without duplicate processing of committed offsets', async () => {
+    const admin = kafka.admin();
+    await admin.connect();
+
     const orderId1 = `ord_restart_1_${Date.now()}`;
     const envelope1 = createEventEnvelope({
       eventType: EventTypes.PaymentAuthorized,
@@ -139,34 +142,52 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       resolveBatch1 = res;
     });
 
+    let message1Offset: string = '';
+    let message1Partition: number = 0;
+
     await consumerInstance1.run({
       autoCommit: false,
       eachMessage: async ({ message, partition }) => {
         if (message.value) {
           receivedBatch1.push(JSON.parse(message.value.toString()));
+          message1Offset = message.offset;
+          message1Partition = partition;
+          const targetOffset = (BigInt(message.offset) + 1n).toString();
           // Explicit offset commit of message 1
           await consumerInstance1.commitOffsets([
-            { topic: testTopic2, partition, offset: (BigInt(message.offset) + 1n).toString() },
+            { topic: testTopic2, partition, offset: targetOffset },
           ]);
           resolveBatch1();
         }
       },
     });
 
-    // Send message 1
+    // 1. Send message 1
     await producer.send({
       topic: testTopic2,
       messages: [{ key: orderId1, value: JSON.stringify(envelope1) }],
     });
 
+    // 2. Consumer 1 receives message 1 and explicitly commits offset
     await batch1Promise;
     expect(receivedBatch1.length).toBe(1);
+    expect(receivedBatch1[0].aggregate_id).toBe(orderId1);
 
-    // Stop consumer 1 (simulated crash / restart)
+    // 3. Verify via Kafka Admin API that Kafka has persisted that committed group offset
+    const expectedOffset1 = (BigInt(message1Offset) + 1n).toString();
+    const fetchedOffsets1 = await admin.fetchOffsets({ groupId, topics: [testTopic2] });
+    const partitionOffsetObj1 = fetchedOffsets1
+      .find((t) => t.topic === testTopic2)
+      ?.partitions.find((p) => p.partition === message1Partition);
+
+    expect(partitionOffsetObj1).toBeDefined();
+    expect(partitionOffsetObj1?.offset).toBe(expectedOffset1);
+
+    // 4. Only after asserting committed offset persistence in Kafka, disconnect Consumer 1
     await consumerInstance1.stop();
     await consumerInstance1.disconnect();
 
-    // Start consumer 2 with same groupId
+    // 5. Start consumer 2 with the same groupId
     const receivedBatch2: any[] = [];
     const consumerInstance2 = kafka.consumer({
       groupId,
@@ -182,20 +203,26 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       resolveBatch2 = res;
     });
 
+    let message2Offset: string = '';
+    let message2Partition: number = 0;
+
     await consumerInstance2.run({
       autoCommit: false,
       eachMessage: async ({ message, partition }) => {
         if (message.value) {
           receivedBatch2.push(JSON.parse(message.value.toString()));
+          message2Offset = message.offset;
+          message2Partition = partition;
+          const targetOffset = (BigInt(message.offset) + 1n).toString();
           await consumerInstance2.commitOffsets([
-            { topic: testTopic2, partition, offset: (BigInt(message.offset) + 1n).toString() },
+            { topic: testTopic2, partition, offset: targetOffset },
           ]);
           resolveBatch2();
         }
       },
     });
 
-    // Send message 2 to the topic
+    // 6. Send message 2 to the topic
     const orderId2 = `ord_restart_2_${Date.now()}`;
     const envelope2 = createEventEnvelope({
       eventType: EventTypes.PaymentAuthorized,
@@ -212,13 +239,28 @@ describe('Kafka Broker Integration & At-Least-Once Messaging Tests', () => {
       messages: [{ key: orderId2, value: JSON.stringify(envelope2) }],
     });
 
+    // 7. Consumer 2 receives message 2
     await batch2Promise;
 
-    // Consumer 2 resumed from committed offset: received ONLY message 2 (no duplicate of message 1)
+    // 8. Verify via Kafka Admin API that committed offset has advanced for message 2
+    const expectedOffset2 = (BigInt(message2Offset) + 1n).toString();
+    const fetchedOffsets2 = await admin.fetchOffsets({ groupId, topics: [testTopic2] });
+    const partitionOffsetObj2 = fetchedOffsets2
+      .find((t) => t.topic === testTopic2)
+      ?.partitions.find((p) => p.partition === message2Partition);
+
+    expect(partitionOffsetObj2).toBeDefined();
+    expect(partitionOffsetObj2?.offset).toBe(expectedOffset2);
+    expect(BigInt(expectedOffset2)).toBeGreaterThan(BigInt(expectedOffset1));
+
+    // 9. Assertions prove:
+    // - message 1 was committed before shutdown and not replayed to consumer 2
+    // - message 2 was consumed and committed after restart
     expect(receivedBatch2.length).toBe(1);
     expect(receivedBatch2[0].aggregate_id).toBe(orderId2);
 
     await consumerInstance2.stop();
     await consumerInstance2.disconnect();
+    await admin.disconnect();
   });
 });
