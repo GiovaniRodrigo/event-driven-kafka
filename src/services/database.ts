@@ -848,9 +848,9 @@ export class DatabaseService {
           event_id, aggregate_id, aggregate_type, event_type, event_version,
           sequence_number, payload, correlation_id, causation_id, producer, occurred_at, created_at
         ) VALUES (
-          $1, $2, $3, $4, $5,
-          COALESCE($6::INT, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2)),
-          $7, $8, $9, $10, $11::TIMESTAMP, CURRENT_TIMESTAMP
+          $1::VARCHAR, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::INT,
+          COALESCE($6::INT, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM event_store WHERE aggregate_id = $2::VARCHAR)),
+          $7::TEXT, $8::VARCHAR, $9::VARCHAR, $10::VARCHAR, $11::TIMESTAMP, CURRENT_TIMESTAMP
         )
         ON CONFLICT (event_id) DO NOTHING
       `;
@@ -947,9 +947,9 @@ export class DatabaseService {
   async setDLQStatus(id: string, status: 'UNRESOLVED' | 'REPLAYING' | 'REPLAYED' | 'DISCARDED'): Promise<void> {
     const query = `
       UPDATE dlq_messages
-      SET status = $2,
-          resolved_at = CASE WHEN $2 IN ('REPLAYED', 'DISCARDED') THEN CURRENT_TIMESTAMP ELSE resolved_at END
-      WHERE id = $1
+      SET status = $2::VARCHAR,
+          resolved_at = CASE WHEN $2::VARCHAR IN ('REPLAYED', 'DISCARDED') THEN CURRENT_TIMESTAMP ELSE resolved_at END
+      WHERE id = $1::VARCHAR
     `;
     await this.pool.query(query, [id, status]);
   }
