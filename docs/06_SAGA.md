@@ -1,8 +1,8 @@
 # 06. Saga Pattern & Distributed Transactions
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Author:** Giovani Rodrigo  
-**Status:** IMPLEMENTED & PRODUCTION HARDENED  
+**Status:** PRODUCTION HARDENED & CONCURRENCY LOCKED  
 
 ---
 
@@ -58,15 +58,25 @@ stateDiagram-v2
 
 ---
 
-## 4. Compensation Barrier Semantics
+## 4. Compensation Barrier & Row-Level Locking Semantics
 
 When multi-step compensation occurs (such as in `FraudRejected` or `ShipmentFailed`), the orchestrator emits both `InventoryReleased` and `PaymentRefundRequested`.
 
-Because Kafka partitions are decoupled, compensation responses may arrive in any order (`PaymentRefunded` before `InventoryReleased`, or vice-versa). The orchestrator maintains:
-* `compensations_pending: ['INVENTORY_RELEASE', 'PAYMENT_REFUND']`
-* `compensations_completed: []`
+Because Kafka partitions are decoupled, compensation responses may arrive in any order (`PaymentRefunded` before `InventoryReleased`, or vice-versa) across concurrent consumers.
 
-The transition to `CANCELLED` and emission of `OrderCancelled` occurs **only** when all pending compensations have completed. Partial completions maintain the saga in `COMPENSATING` state.
+### Monotonic Barrier Invariant:
+1. When evaluating a compensation event, the orchestrator acquires an exclusive row lock:
+   ```sql
+   SELECT * FROM saga_instances WHERE aggregate_id = $1 FOR UPDATE
+   ```
+2. The orchestrator atomically appends the completed action to `compensations_completed`.
+3. If `compensations_completed` contains all steps in `compensations_pending`:
+   - Transitions state to `CANCELLED`.
+   - Emits `OrderCancelled` exactly once.
+4. If steps are still pending:
+   - Maintains state in `COMPENSATING`.
+   - Suppresses `OrderCancelled` emission.
+5. Late or duplicate compensation events arriving after `CANCELLED` are silently ignored without state corruption.
 
 ---
 
@@ -86,6 +96,3 @@ CREATE TABLE saga_instances (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
-
-### Crash Recovery Guarantee
-Because the Saga Orchestrator stores its state machine after every single transition in PostgreSQL, an orchestrator process restart or Kubernetes pod eviction resumes execution from the exact persisted step upon consumer rebalance.

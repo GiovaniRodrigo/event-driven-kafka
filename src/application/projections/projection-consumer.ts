@@ -28,8 +28,7 @@ export class ProjectionConsumer extends BaseConsumer {
   }
 
   protected async processEvent(envelope: EventEnvelope): Promise<void> {
-    const { event_type: eventType, aggregate_id: orderId, correlation_id: correlationId, occurred_at: occurredAt } = envelope;
-    const payload = envelope.payload as Record<string, any>;
+    const { event_type: eventType, aggregate_id: orderId } = envelope;
 
     // 1. Persist to Immutable Event Store (Audit Log / Sourcing)
     await this.db.appendToEventStore(envelope);
@@ -37,23 +36,17 @@ export class ProjectionConsumer extends BaseConsumer {
     // 2. Also keep legacy order_events updated for timeline
     await this.db.recordEvent(orderId, eventType, envelope.producer || 'system');
 
-    // 3. Update Materialized CQRS Read Models idempotently
+    // 3. Update Materialized CQRS Read Models idempotently (DB mutations only)
     await this.applyHistoricalEvent(envelope);
 
-    // 4. Emit to real-time order room for timeline view (live stream only)
-    this.gateway.orderEvent(orderId, {
-      event_type: eventType,
-      topic: envelope.producer || 'unknown',
-      timestamp: occurredAt,
-      correlation_id: correlationId,
-      causation_id: envelope.causation_id,
-      payload,
-    });
+    // 4. Emit live realtime telemetry notifications (Live stream only, bypassed during replay)
+    this.emitLiveNotifications(envelope);
   }
 
   /**
    * Applies an event to the CQRS read models without emitting external side effects.
    * Safe to call during Event Replay or live stream processing.
+   * STRICT GUARANTEE: Zero Kafka emissions, Zero websocket broadcasts, Zero command side-effects.
    */
   public async applyHistoricalEvent(envelope: EventEnvelope, externalClient?: PoolClient): Promise<void> {
     const { event_type: eventType, aggregate_id: orderId, occurred_at: occurredAt, event_id: eventId } = envelope;
@@ -91,16 +84,6 @@ export class ProjectionConsumer extends BaseConsumer {
               occurredAt,
             ]
           );
-
-          if (this.gateway) {
-            this.gateway.orderCreated({
-              order_id: orderId,
-              user_id: payload.user_id,
-              status: 'pending',
-              total_amount: payload.total_amount,
-              created_at: occurredAt,
-            });
-          }
           break;
         }
 
@@ -111,9 +94,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_pending', step: 'PAYMENT' });
-          }
           break;
         }
 
@@ -136,10 +116,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [payload.payment_id, orderId, payload.user_id, payload.amount, payload.authorization_code, occurredAt]
           );
-
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_approved', step: 'PAYMENT' });
-          }
           break;
         }
 
@@ -152,9 +128,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'payment_rejected', step: 'PAYMENT' });
-          }
           break;
         }
 
@@ -177,9 +150,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_pending', step: 'INVENTORY' });
-          }
           break;
         }
 
@@ -206,10 +176,6 @@ export class ProjectionConsumer extends BaseConsumer {
                 [item.quantity || 1, occurredAt, item.sku]
               );
             }
-          }
-
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_reserved', step: 'INVENTORY' });
           }
           break;
         }
@@ -241,9 +207,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_failed', step: 'INVENTORY' });
-          }
           break;
         }
 
@@ -254,9 +217,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_pending', step: 'FRAUD' });
-          }
           break;
         }
 
@@ -269,9 +229,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.fraud_check_id, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_approved', step: 'FRAUD' });
-          }
           break;
         }
 
@@ -284,9 +241,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_rejected', step: 'FRAUD' });
-          }
           break;
         }
 
@@ -297,9 +251,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_pending', step: 'SHIPPING' });
-          }
           break;
         }
 
@@ -322,10 +273,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [payload.shipment_id, orderId, payload.tracking_number, payload.carrier || 'FEDEX', payload.estimated_delivery, occurredAt]
           );
-
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_created', step: 'SHIPPING' });
-          }
           break;
         }
 
@@ -338,9 +285,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'completed' });
-          }
           break;
         }
 
@@ -353,9 +297,6 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'cancelled' });
-          }
           break;
         }
 
@@ -368,14 +309,11 @@ export class ProjectionConsumer extends BaseConsumer {
           `,
             [orderId, payload.reason, occurredAt]
           );
-          if (this.gateway) {
-            this.gateway.orderUpdated({ order_id: orderId, status: 'failed' });
-          }
           break;
         }
       }
 
-      // Record in projection_applied_events within same transaction
+      // Record in projection_applied_events within same atomic transaction
       await this.db.markProjectionEventApplied('order-fulfillment-projection', eventId, orderId, client);
     };
 
@@ -399,6 +337,80 @@ export class ProjectionConsumer extends BaseConsumer {
       } finally {
         client.release();
       }
+    }
+  }
+
+  /**
+   * Dispatches live websocket notifications to connected clients.
+   * Isolated from projection persistence and skipped during historical event replays.
+   */
+  public emitLiveNotifications(envelope: EventEnvelope): void {
+    if (!this.gateway) return;
+
+    const { event_type: eventType, aggregate_id: orderId, correlation_id: correlationId, occurred_at: occurredAt } = envelope;
+    const payload = envelope.payload as Record<string, any>;
+
+    this.gateway.orderEvent(orderId, {
+      event_type: eventType,
+      topic: envelope.producer || 'unknown',
+      timestamp: occurredAt,
+      correlation_id: correlationId,
+      causation_id: envelope.causation_id,
+      payload,
+    });
+
+    switch (eventType) {
+      case EventTypes.OrderCreated:
+        this.gateway.orderCreated({
+          order_id: orderId,
+          user_id: payload.user_id,
+          status: 'pending',
+          total_amount: payload.total_amount,
+          created_at: occurredAt,
+        });
+        break;
+      case EventTypes.PaymentRequested:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'payment_pending', step: 'PAYMENT' });
+        break;
+      case EventTypes.PaymentAuthorized:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'payment_approved', step: 'PAYMENT' });
+        break;
+      case EventTypes.PaymentRejected:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'payment_rejected', step: 'PAYMENT' });
+        break;
+      case EventTypes.InventoryReservationRequested:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_pending', step: 'INVENTORY' });
+        break;
+      case EventTypes.InventoryReserved:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_reserved', step: 'INVENTORY' });
+        break;
+      case EventTypes.InventoryReservationFailed:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'inventory_failed', step: 'INVENTORY' });
+        break;
+      case EventTypes.FraudCheckRequested:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_pending', step: 'FRAUD' });
+        break;
+      case EventTypes.FraudApproved:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_approved', step: 'FRAUD' });
+        break;
+      case EventTypes.FraudRejected:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'fraud_rejected', step: 'FRAUD' });
+        break;
+      case EventTypes.ShipmentRequested:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_pending', step: 'SHIPPING' });
+        break;
+      case EventTypes.ShipmentCreated:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'shipping_created', step: 'SHIPPING' });
+        break;
+      case EventTypes.OrderCompleted:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'completed' });
+        break;
+      case EventTypes.OrderCancelled:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'cancelled' });
+        break;
+      case EventTypes.OrderFailed:
+        this.gateway.orderUpdated({ order_id: orderId, status: 'failed' });
+        break;
     }
   }
 }
