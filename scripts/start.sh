@@ -146,6 +146,15 @@ else
   echo "Stop it with: kill \$(cat scripts/.watchdog.pid)"
 fi
 
+# --- select environment compose files ---------------------------------------
+COMPOSE_ENV="${ENV:-dev}"
+if [ "$COMPOSE_ENV" = "prod" ] || [ "$COMPOSE_ENV" = "production" ]; then
+  COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
+else
+  COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.dev.yml)
+fi
+
 # --- bring the stack up ------------------------------------------------------
-echo "Starting stack: ${COMPOSE[*]} up -d"
-"${COMPOSE[@]}" up -d
+echo "Starting stack (environment: $COMPOSE_ENV): ${COMPOSE[*]} ${COMPOSE_FILES[*]} up -d"
+"${COMPOSE[@]}" "${COMPOSE_FILES[@]}" up -d
+

@@ -1,10 +1,14 @@
-version: '3.8'
-
-# Resource ceilings (mem_limit / cpus / heap) are injected via ${...} from the
-# .env file written by scripts/start.sh, which measures the host and calibrates
-# per-service limits at startup. The :- fallbacks let `docker compose up` run
-# standalone (without start.sh) using conservative ~8GB-machine defaults.
-# See docs/07_WATCHDOG.md.
+# ==============================================================================
+# Base Docker Compose Configuration — Event-Driven Kafka Architecture
+#
+# Defines core services, dependencies, networks, volumes, healthchecks, and
+# dynamic resource limits.
+#
+# Usage:
+#   Development: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   Production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   Auto-calibrated: scripts/start.sh (or ENV=prod scripts/start.sh)
+# ==============================================================================
 
 services:
   zookeeper:
@@ -16,13 +20,13 @@ services:
       KAFKA_HEAP_OPTS: ${ZK_HEAP_OPTS:--Xmx256m -Xms128m}
     mem_limit: ${ZK_MEM_LIMIT:-512m}
     cpus: ${ZK_CPUS:-0.5}
-    ports:
-      - "2181:2181"
     healthcheck:
       test: echo srvr | nc localhost 2181
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - event-driven-network
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
@@ -30,9 +34,6 @@ services:
     depends_on:
       zookeeper:
         condition: service_healthy
-    ports:
-      - "9092:9092"
-      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -52,27 +53,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - event-driven-network
 
   postgres:
     image: postgres:15-alpine
     container_name: postgres
-    ports:
-      - "5432:5432"
     environment:
-      POSTGRES_DB: event_driven_test
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-event_driven_test}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     command: postgres -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB} -c max_connections=200
     mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
     cpus: ${POSTGRES_CPUS:-1.0}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d event_driven_test"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-event_driven_test}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - event-driven-network
 
   app:
     build:
@@ -84,32 +86,25 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    ports:
-      # Defaults to host port 3000; override with APP_PORT if it is taken,
-      # e.g. `APP_PORT=3001 docker compose up`.
-      - "${APP_PORT:-3000}:3000"
     environment:
-      NODE_ENV: development
       KAFKA_BROKER: kafka:29092
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/event_driven_test
-      LOG_LEVEL: info
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-event_driven_test}
       NODE_OPTIONS: ${APP_NODE_OPTIONS:---max-old-space-size=384}
     mem_limit: ${APP_MEM_LIMIT:-512m}
     cpus: ${APP_CPUS:-1.0}
-    volumes:
-      - .:/app
-      - /app/node_modules
-    command: npm run dev
     healthcheck:
       test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - event-driven-network
 
 volumes:
   postgres_data:
     driver: local
 
 networks:
-  default:
+  event-driven-network:
     name: event-driven-network
+    driver: bridge

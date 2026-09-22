@@ -33,9 +33,15 @@
     "benchmark:resilience:postgres": "ts-node benchmarks/runner.ts --scenario=resilience-postgres",
     "benchmark:all": "ts-node benchmarks/runner.ts --suite=all",
     "db:migrate": "psql \"$DATABASE_URL\" -f scripts/init-db.sql",
-    "docker:up": "docker compose up -d",
+    "docker:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f",
+    "docker:dev": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build",
+    "docker:dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "docker:prod": "docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build",
+    "docker:prod:down": "docker compose -f docker-compose.yml -f docker-compose.prod.yml down",
+    "docker:build:dev": "docker build --target development -t event-driven-api:dev -f docker/Dockerfile .",
+    "docker:build:prod": "docker build --target production -t event-driven-api:prod -f docker/Dockerfile ."
   },
   "keywords": [
     "kafka",

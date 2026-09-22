@@ -1,0 +1,37 @@
+# ==============================================================================
+# Docker Compose Local Override Example
+#
+# Copy this file to `docker-compose.override.yml` to apply local developer
+# preferences automatically when running plain `docker compose up`.
+#
+# cp docker-compose.override.yml.example docker-compose.override.yml
+# ==============================================================================
+
+services:
+  zookeeper:
+    ports:
+      - "2181:2181"
+
+  kafka:
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+
+  postgres:
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+
+  app:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev

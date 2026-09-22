@@ -31,7 +31,7 @@ cleanup() {
   if [ "$INFRA_STARTED" -eq 1 ]; then
     echo ""
     echo ">> Tearing down test containers..."
-    docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -40,7 +40,7 @@ trap cleanup EXIT
 echo ">> Checking Test Infrastructure..."
 if docker ps >/dev/null 2>&1; then
   echo ">> Docker daemon is active. Starting test postgres and kafka..."
-  docker compose up -d postgres kafka zookeeper
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres kafka zookeeper
   INFRA_STARTED=1
   
   echo ">> Waiting for PostgreSQL readiness..."

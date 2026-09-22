@@ -214,11 +214,25 @@ Every event produced in the system adheres to the universal envelope schema:
 * Node.js >= 20.0.0
 * Docker & Docker Compose
 
-### 4.2 Start the Stack (Calibrated with Host Memory Watchdog)
+### 4.2 Start the Stack (Docker Development vs Production)
+
+The environment configurations are separated into distinct Compose layers and multi-stage Dockerfile targets:
+
 ```bash
-# Starts ZooKeeper, Kafka, PostgreSQL, and API with dynamically calibrated memory limits
-./scripts/start.sh
+# --- Development Mode (Hot-reload, full devDependencies, exposed debug ports) ---
+npm run docker:dev
+# ou: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# --- Production Mode (Hardened, non-root user, immutable runtime, network isolation) ---
+npm run docker:prod
+# ou: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# --- Self-Calibrating Startup (with host memory watchdog) ---
+./scripts/start.sh              # Dev stack (default)
+ENV=prod ./scripts/start.sh     # Prod stack
 ```
+
+> 📖 See [`docs/infra/docker-environments.md`](./docs/infra/docker-environments.md) for full architecture details and [`docs/infra/relatorio-qualidade-infra.md`](./docs/infra/relatorio-qualidade-infra.md) for infrastructure quality analysis.
 
 ### 4.3 Native Development & Tests
 ```bash

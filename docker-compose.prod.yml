@@ -1,0 +1,55 @@
+# ==============================================================================
+# Production Configuration — Event-Driven Kafka Architecture
+#
+# Production hardening features:
+#   - Build target: production (compiled JS in dist/, non-root user, dumb-init)
+#   - Immutable container runtime (NO host volume mounts)
+#   - Restart policy: unless-stopped
+#   - Network isolation: Kafka, Zookeeper, Postgres ports are strictly internal
+#   - Only App gateway port 3000 exposed (or routed via reverse proxy)
+#   - Log rotation with json-file driver (prevents disk space exhaustion)
+#   - Production logging level (LOG_LEVEL=info or warn)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ==============================================================================
+
+services:
+  zookeeper:
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  kafka:
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  postgres:
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  app:
+    build:
+      target: production
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

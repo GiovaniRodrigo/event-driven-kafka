@@ -1,0 +1,42 @@
+# ==============================================================================
+# Development Overrides — Event-Driven Kafka Architecture
+#
+# Adds local development features:
+#   - Build target: development (ts-node + devDependencies)
+#   - Source code live bind-mount (.:/app) for hot-reload
+#   - Exposed host ports for direct debugging (Postgres 5432, Kafka 9092, ZK 2181)
+#   - Automatic schema initialization via init-db.sql mount
+#   - Detailed debug logging (LOG_LEVEL=debug)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ==============================================================================
+
+services:
+  zookeeper:
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+
+  kafka:
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+      - "29092:29092"
+
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+
+  app:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev

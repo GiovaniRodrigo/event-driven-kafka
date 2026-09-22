@@ -1,0 +1,25 @@
+# ==============================================================================
+# Development Dockerfile for Event-Driven Kafka Architecture
+# Optimised for local development with full devDependencies and hot reloading
+# ==============================================================================
+FROM node:20-alpine
+
+# Install dumb-init and curl for healthcheck / process management
+RUN apk add --no-cache dumb-init curl
+
+WORKDIR /app
+
+ENV NODE_ENV=development
+
+# Install all dependencies (including ts-node and jest)
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Copy project files
+COPY tsconfig.json ./
+COPY src ./src
+
+EXPOSE 3000
+
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["npm", "run", "dev"]
