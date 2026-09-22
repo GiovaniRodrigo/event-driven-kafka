@@ -4,7 +4,7 @@
 
 This document details the resilience, fault-tolerance, and automated recovery verification performed against `GiovaniRodrigo/event-driven-kafka`. The benchmark subjects the distributed event-driven system to active infrastructure failures, process interruptions, container terminations, and network partitions under load.
 
-The primary objective is to empirically verify that distributed data consistency, zero-data-loss guarantees, consumer idempotency, and transactional outbox fencing hold under severe degradation.
+The primary objective is to empirically verify distributed data consistency, At-Least-Once delivery, consumer idempotency, and transactional outbox fencing under severe degradation.
 
 > [!NOTE]
 > All chaos scenarios were executed with live workloads on real PostgreSQL and Apache Kafka container instances without mocking infrastructure.
@@ -30,8 +30,8 @@ flowchart TD
 4. **PostgreSQL Container Restart**: `docker restart postgres` with active ACID transactions, connection pools, and outbox polling loops.
 
 ### 2.2 Measurement Criteria
-- **Zero Data Loss ($L = 0$)**: All orders submitted prior to or during recoverable failure must reach final consistency.
-- **Deduplication ($D = 0$)**: At-Least-Once delivery re-drives messages without duplicate entity mutations or balance deductions.
+- **0 Unaccounted Events ($L = 0$)**: All orders submitted prior to or during recoverable failure must reach final consistency without unaccounted event loss.
+- **0 Duplicate Business Mutations ($D = 0$)**: At-Least-Once delivery re-drives messages without duplicate entity mutations or balance deductions.
 - **Mean Time to Recover (MTTR)**: Time elapsed from infrastructure restoration to full lag drainage and steady-state resumption.
 - **Fencing Integrity**: Stale outbox worker leases must be reclaimed without dual-publishing anomalies.
 
@@ -63,7 +63,7 @@ flowchart TD
   - $T_0 + 3.0s$: Replacement consumer starts.
   - $T_0 + 6.1s$: Rebalance complete; consumer joins group.
   - $T_0 + 46.55s$: Backlog completely drained.
-- **Data Invariant**: Zero lost events, zero duplicate payments authorized.
+- **Observed Invariant**: 0 unaccounted events, 0 duplicate business mutations under tested scenarios.
 
 ### 4.2 Scenario RES-B: Outbox Relay Surge & Lease Expiration
 - **Failure Description**: Rapid burst of order creation transactions exceeding relay batch processing capacity.
@@ -75,7 +75,7 @@ flowchart TD
   - Upon successful publish, status updated to `PUBLISHED` atomically.
 - **Recovery Timeline**:
   - Backlog drained from 275 to 0 in 30.11s at a sustainable rate of 9.96 events/sec.
-- **Data Invariant**: 100% of outbox records transitioned to `PUBLISHED`. Zero lost events.
+- **Observed Invariant**: 100% of outbox records transitioned to `PUBLISHED`. 0 lost publications observed.
 
 ### 4.3 Scenario RES-C: Apache Kafka Broker Restart
 - **Failure Description**: Cold restart of the Kafka broker (`docker restart kafka`) under active traffic.
@@ -88,7 +88,7 @@ flowchart TD
 - **Recovery Timeline**:
   - Broker restart duration: 2.13s.
   - Total system recovery to steady state: 38.07s.
-- **Data Invariant**: Zero split-brain states; all messages delivered At-Least-Once.
+- **Observed Invariant**: Zero split-brain states observed; messages delivered under At-Least-Once semantics without lost events.
 
 ```mermaid
 sequenceDiagram
@@ -120,7 +120,7 @@ sequenceDiagram
   - Database downtime: 2.28s.
   - Connection pool recovery: 0.57s.
   - Total recovery time: 2.85s.
-- **Data Invariant**: Zero corrupted transactions; zero partial saga states.
+- **Observed Invariant**: Zero corrupted transactions observed; zero partial saga states.
 
 ---
 

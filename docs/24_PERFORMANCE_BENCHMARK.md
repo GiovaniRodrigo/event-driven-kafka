@@ -50,7 +50,7 @@ flowchart LR
 1. **HTTP Ingestion Latency**: Measured at the Express middleware boundary via high-resolution timers (`process.hrtime.bigint()`), capturing request receipt to 201 Created response.
 2. **Outbox Drain Rate & Backlog**: Audited against `outbox_events` (`status = 'PENDING'` vs `status = 'PUBLISHED'`), recording time elapsed from peak backlog to zero.
 3. **Kafka Consumer Lag**: Queried directly from the Kafka cluster via `Kafka.admin().fetchOffsets()` comparing high watermarks against consumer group committed offsets across all 7 topic consumer groups.
-4. **End-to-End Fulfillment Latency**: Calculated using database monotonic server timestamps across the entire saga lifecycle: from `order_events.OrderCreated` to final `order_events.OrderCompleted` or `OrderCancelled`.
+4. **End-to-End Fulfillment Latency**: Calculated using PostgreSQL server-generated timestamps (`created_at`) correlated strictly by `aggregate_id` across the entire saga lifecycle: from `order_events.OrderCreated` to final `order_events.OrderCompleted` or `OrderCancelled`.
 5. **DLQ Replay Latency**: Measured from manual DLQ batch trigger to topic republication and database resolution.
 
 ### 3.2 Test Phases

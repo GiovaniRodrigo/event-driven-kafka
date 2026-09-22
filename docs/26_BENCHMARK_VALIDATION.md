@@ -53,7 +53,7 @@ flowchart TD
 
     subgraph Observability & Metrics Audit
         MC[MetricsCollector (benchmarks/lib/metrics-collector.ts)] -.->|fetchOffsets & topicOffsets| KB
-        MC -.->|created_at monotonic queries| DB
+        MC -.->|created_at server queries| DB
         MC -.->|Saga state query| DB
     end
 ```
@@ -131,7 +131,7 @@ Latency percentiles ($p_{50}, p_{95}, p_{99}$) were audited across all measureme
 
 ### 7.1 Clock Source & Correlation Mechanism
 - **Correlation Key**: All stage timestamps are joined strictly on `aggregate_id` (representing the unique `order_id`) across `event_store` and `order_events`.
-- **Clock Source**: Monotonic PostgreSQL server timestamps (`created_at`) are utilized. This eliminates client-server clock skew and cross-process clock drift.
+- **Clock Source**: PostgreSQL server-generated timestamps (`created_at`) correlated strictly by `aggregate_id` are utilized. This eliminates client-server clock skew and cross-process clock drift.
 - **Stage Progression Validation**: Every measured sample verifies that `OrderCreated` preceded `PaymentAuthorized`, `InventoryReserved`, `FraudApproved`, `ShipmentCreated`, and `OrderCompleted`.
 
 ```
