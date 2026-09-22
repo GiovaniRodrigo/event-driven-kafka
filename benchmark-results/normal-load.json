@@ -1,0 +1,172 @@
+{
+  "scenario": "scenario-b-normal-load",
+  "timestamp": "2026-09-22T06:53:04.433Z",
+  "environment": {
+    "os": "Linux 7.0.0-31-generic (x64)",
+    "kernel": "7.0.0-31-generic",
+    "nodeVersion": "v20.20.2",
+    "dockerVersion": "Docker Engine 29.8.0 / Compose v5.5.1",
+    "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cpuCores": 8,
+    "totalMemoryGB": 7.58,
+    "freeMemoryGB": 1.74,
+    "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
+    "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
+    "kafkaPartitions": 3,
+    "replicationFactor": 1,
+    "maxDbConnections": 20
+  },
+  "workload": {
+    "targetRatePerSec": 35,
+    "durationSeconds": 30,
+    "totalOrdersTarget": 1050
+  },
+  "httpMetrics": {
+    "totalRequests": 1050,
+    "successfulRequests": 1050,
+    "failedRequests": 0,
+    "errorRatePercent": 0,
+    "actualThroughputReqPerSec": 35.01,
+    "durationSeconds": 29.99,
+    "latency": {
+      "count": 1050,
+      "p50": 28,
+      "p95": 322,
+      "p99": 501,
+      "min": 5,
+      "max": 664,
+      "avg": 83.97
+    }
+  },
+  "outboxMetrics": {
+    "outboxPending": 0,
+    "outboxPublishedTotal": 1050,
+    "outboxFailedTotal": 0,
+    "drainedCleanly": true,
+    "drainTimeSeconds": 0.049
+  },
+  "kafkaMetrics": {
+    "finalTotalLag": 29082,
+    "groupLags": [
+      {
+        "group": "payment-service-group",
+        "lag": 0
+      },
+      {
+        "group": "inventory-service-group",
+        "lag": 0
+      },
+      {
+        "group": "fraud-service-group",
+        "lag": 0
+      },
+      {
+        "group": "shipping-service-group",
+        "lag": 0
+      },
+      {
+        "group": "notification-service-group",
+        "lag": 0
+      },
+      {
+        "group": "saga-orchestrator-group",
+        "lag": 1940
+      },
+      {
+        "group": "projection-read-model-group",
+        "lag": 27142
+      }
+    ],
+    "lagRecoveryTimeSec": 30.61
+  },
+  "e2eLatency": {
+    "fulfillmentLatency": {
+      "count": 215,
+      "p50": 990,
+      "p95": 3529,
+      "p99": 3938,
+      "min": 29,
+      "max": 4022,
+      "avg": 1352.22
+    },
+    "stepLatencies": [
+      {
+        "step": "OrderCreated -> PaymentAuthorized",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "PaymentAuthorized -> InventoryReserved",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "InventoryReserved -> FraudApproved",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "FraudApproved -> ShipmentCreated",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "ShipmentCreated -> OrderCompleted",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      }
+    ],
+    "totalOrdersSampled": 1569,
+    "totalCompletedOrders": 215
+  },
+  "sagaMetrics": {
+    "successfulSagas": {
+      "count": 121,
+      "stats": {
+        "count": 121,
+        "p50": 104915,
+        "p95": 140729,
+        "p99": 141183,
+        "min": 851,
+        "max": 141513,
+        "avg": 88528.69
+      }
+    },
+    "compensatingSagas": {
+      "count": 0,
+      "stats": {
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "min": 0,
+        "max": 0,
+        "avg": 0
+      }
+    },
+    "failedSagas": 0,
+    "totalSagas": 1050
+  },
+  "dataIntegrity": {
+    "ordersCreated": 1050,
+    "ordersCompleted": 172,
+    "ordersCancelled": 57,
+    "eventStoreTotalEvents": 2719,
+    "lostEvents": 878
+  }
+}

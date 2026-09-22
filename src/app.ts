@@ -19,6 +19,23 @@ export function createApp(deps: AppDependencies): Express {
   const app = express();
   app.use(express.json());
 
+  let httpRequestsTotal = 0;
+  const httpDurations: number[] = [];
+
+  app.use((_req: Request, res: Response, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      httpRequestsTotal++;
+      const duration = Date.now() - start;
+      if (httpDurations.length < 10000) {
+        httpDurations.push(duration);
+      } else {
+        httpDurations[Math.floor(Math.random() * httpDurations.length)] = duration;
+      }
+    });
+    next();
+  });
+
   // --- HEALTH & READINESS ---
 
   // Liveness probe (is Node.js process alive?)
@@ -201,8 +218,20 @@ export function createApp(deps: AppDependencies): Express {
 
       const activeSagas = sagas.filter((s) => !['COMPLETED', 'CANCELLED', 'FAILED'].includes(s.state)).length;
 
+      const sortedDurations = [...httpDurations].sort((a, b) => a - b);
+      const httpP50 = sortedDurations[Math.floor(sortedDurations.length * 0.5)] || 0;
+      const httpP95 = sortedDurations[Math.floor(sortedDurations.length * 0.95)] || 0;
+      const httpP99 = sortedDurations[Math.floor(sortedDurations.length * 0.99)] || 0;
+
       return res.json({
         ...metrics,
+        http_requests_total: httpRequestsTotal,
+        http_request_duration: {
+          p50_ms: httpP50,
+          p95_ms: httpP95,
+          p99_ms: httpP99,
+          samples: sortedDurations.length,
+        },
         active_sagas: activeSagas,
         unresolved_dlq_count: dlqCount,
         consumers: getConsumersStatus(),

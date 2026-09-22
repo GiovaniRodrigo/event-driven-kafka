@@ -326,7 +326,11 @@ export class ProjectionConsumer extends BaseConsumer {
         await executeInTx(client);
         await client.query('COMMIT');
       } catch (err) {
-        await client.query('ROLLBACK');
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Ignored: connection was severed by server restart
+        }
         logger.error({
           event: 'projection_error',
           order_id: orderId,

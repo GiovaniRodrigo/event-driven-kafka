@@ -67,6 +67,12 @@ export class DatabaseService {
     this.pool.on('error', (error) => {
       logger.error({ event: 'pool_error', error: error.message });
     });
+
+    this.pool.on('connect', (client) => {
+      client.on('error', (err) => {
+        logger.warn({ event: 'client_connection_error', error: err.message });
+      });
+    });
   }
 
   getPool(): Pool {
@@ -85,7 +91,11 @@ export class DatabaseService {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Ignored: connection was severed by server restart
+      }
       throw error;
     } finally {
       client.release();
@@ -1134,14 +1144,86 @@ export class DatabaseService {
   async getMetrics() {
     const query = `
       SELECT
-        COUNT(*) as total_orders,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_orders,
-        COUNT(CASE WHEN status = 'failed' OR status = 'cancelled' THEN 1 END) as failed_orders,
-        COALESCE(AVG(total_amount), 0) as avg_order_value
-      FROM orders
+        (SELECT COUNT(*) FROM orders) as total_orders,
+        (SELECT COUNT(*) FROM orders) as orders_created_total,
+        (SELECT COUNT(*) FROM order_read_model WHERE status = 'completed') as completed_orders,
+        (SELECT COUNT(*) FROM order_read_model WHERE status = 'completed') as orders_completed_total,
+        (SELECT COUNT(*) FROM order_read_model WHERE status = 'cancelled') as orders_cancelled_total,
+        (SELECT COUNT(*) FROM order_read_model WHERE status = 'failed' OR status = 'cancelled') as failed_orders,
+        (SELECT COALESCE(AVG(total_amount), 0) FROM orders) as avg_order_value,
+        (SELECT COUNT(*) FROM outbox_events WHERE status = 'PENDING') as outbox_pending,
+        (SELECT COUNT(*) FROM outbox_events WHERE status = 'PROCESSING') as outbox_processing,
+        (SELECT COUNT(*) FROM outbox_events WHERE status = 'PUBLISHED') as outbox_published_total,
+        (SELECT COUNT(*) FROM outbox_events WHERE status = 'FAILED') as outbox_failed_total,
+        (SELECT COUNT(*) FROM saga_instances) as saga_started_total,
+        (SELECT COUNT(*) FROM saga_instances WHERE state = 'COMPLETED') as saga_completed_total,
+        (SELECT COUNT(*) FROM saga_instances WHERE state = 'CANCELLED') as saga_compensated_total,
+        (SELECT COUNT(*) FROM saga_instances WHERE state = 'FAILED') as saga_failed_total,
+        (SELECT COUNT(*) FROM dlq_messages) as dlq_messages_total,
+        (SELECT COUNT(*) FROM dlq_messages WHERE status = 'UNRESOLVED') as dlq_unresolved_total,
+        (SELECT COUNT(*) FROM dlq_messages WHERE status = 'REPLAYED') as dlq_replayed_total,
+        (SELECT COUNT(*) FROM event_store) as event_store_events_total
     `;
     const result = await this.pool.query(query);
-    return result.rows[0];
+    const row = result.rows[0];
+    return {
+      total_orders: parseInt(row.total_orders, 10) || 0,
+      orders_created_total: parseInt(row.orders_created_total, 10) || 0,
+      completed_orders: parseInt(row.completed_orders, 10) || 0,
+      orders_completed_total: parseInt(row.orders_completed_total, 10) || 0,
+      orders_cancelled_total: parseInt(row.orders_cancelled_total, 10) || 0,
+      failed_orders: parseInt(row.failed_orders, 10) || 0,
+      avg_order_value: parseFloat(row.avg_order_value) || 0,
+      outbox_pending: parseInt(row.outbox_pending, 10) || 0,
+      outbox_processing: parseInt(row.outbox_processing, 10) || 0,
+      outbox_published_total: parseInt(row.outbox_published_total, 10) || 0,
+      outbox_failed_total: parseInt(row.outbox_failed_total, 10) || 0,
+      saga_started_total: parseInt(row.saga_started_total, 10) || 0,
+      saga_completed_total: parseInt(row.saga_completed_total, 10) || 0,
+      saga_compensated_total: parseInt(row.saga_compensated_total, 10) || 0,
+      saga_failed_total: parseInt(row.saga_failed_total, 10) || 0,
+      dlq_messages_total: parseInt(row.dlq_messages_total, 10) || 0,
+      dlq_unresolved_total: parseInt(row.dlq_unresolved_total, 10) || 0,
+      dlq_replayed_total: parseInt(row.dlq_replayed_total, 10) || 0,
+      event_store_events_total: parseInt(row.event_store_events_total, 10) || 0,
+    };
+  }
+
+  async truncateBenchmarkData(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`
+        TRUNCATE TABLE 
+          dlq_outbox,
+          dlq_messages,
+          projection_applied_events,
+          order_read_model,
+          payment_read_model,
+          shipment_read_model,
+          inventory_read_model,
+          order_events,
+          event_store,
+          saga_instances,
+          processed_events,
+          outbox_events,
+          orders
+        RESTART IDENTITY CASCADE;
+      `);
+
+      await client.query(`
+        INSERT INTO inventory_read_model (sku, name, total_stock, reserved_stock, available_stock)
+        VALUES 
+          ('LAPTOP-001', 'High Performance Workstation', 1000000, 0, 1000000),
+          ('PHONE-002', 'Smartphone Pro Max', 1000000, 0, 1000000),
+          ('KEYBOARD-003', 'Wireless Mechanical Keyboard', 1000000, 0, 1000000),
+          ('MONITOR-004', '4K Ultra-wide Monitor', 1000000, 0, 1000000),
+          ('OUT_OF_STOCK_ITEM', 'Limited Edition Collectible', 0, 0, 0)
+        ON CONFLICT (sku) DO UPDATE 
+        SET total_stock = 1000000, reserved_stock = 0, available_stock = 1000000;
+      `);
+    } finally {
+      client.release();
+    }
   }
 
   async disconnect(): Promise<void> {

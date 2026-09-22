@@ -1,0 +1,269 @@
+{
+  "scenario": "scenario-c-stress-load",
+  "timestamp": "2026-09-22T06:58:12.055Z",
+  "environment": {
+    "os": "Linux 7.0.0-31-generic (x64)",
+    "kernel": "7.0.0-31-generic",
+    "nodeVersion": "v20.20.2",
+    "dockerVersion": "Docker Engine 29.8.0 / Compose v5.5.1",
+    "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cpuCores": 8,
+    "totalMemoryGB": 7.58,
+    "freeMemoryGB": 2.02,
+    "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
+    "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
+    "kafkaPartitions": 3,
+    "replicationFactor": 1,
+    "maxDbConnections": 20
+  },
+  "stressSteps": [
+    {
+      "targetRateReqPerSec": 25,
+      "actualThroughputReqPerSec": 25.05,
+      "totalRequests": 250,
+      "successfulRequests": 250,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 250,
+        "p50": 22,
+        "p95": 137,
+        "p99": 287,
+        "min": 5,
+        "max": 365,
+        "avg": 37.05
+      },
+      "clusterLagDuringStep": 29343
+    },
+    {
+      "targetRateReqPerSec": 50,
+      "actualThroughputReqPerSec": 47.85,
+      "totalRequests": 500,
+      "successfulRequests": 500,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 500,
+        "p50": 39,
+        "p95": 279,
+        "p99": 470,
+        "min": 8,
+        "max": 484,
+        "avg": 70.58
+      },
+      "clusterLagDuringStep": 29452
+    },
+    {
+      "targetRateReqPerSec": 100,
+      "actualThroughputReqPerSec": 66.05,
+      "totalRequests": 1000,
+      "successfulRequests": 1000,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 1000,
+        "p50": 71,
+        "p95": 5459,
+        "p99": 5766,
+        "min": 9,
+        "max": 5839,
+        "avg": 977.8
+      },
+      "clusterLagDuringStep": 29854
+    },
+    {
+      "targetRateReqPerSec": 150,
+      "actualThroughputReqPerSec": 131.69,
+      "totalRequests": 1500,
+      "successfulRequests": 1500,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 1500,
+        "p50": 477,
+        "p95": 1028,
+        "p99": 1438,
+        "min": 23,
+        "max": 1527,
+        "avg": 522.07
+      },
+      "clusterLagDuringStep": 30016
+    },
+    {
+      "targetRateReqPerSec": 200,
+      "actualThroughputReqPerSec": 173.61,
+      "totalRequests": 2000,
+      "successfulRequests": 2000,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 2000,
+        "p50": 1685,
+        "p95": 1887,
+        "p99": 1919,
+        "min": 588,
+        "max": 1936,
+        "avg": 1684.86
+      },
+      "clusterLagDuringStep": 30062
+    },
+    {
+      "targetRateReqPerSec": 250,
+      "actualThroughputReqPerSec": 129.53,
+      "totalRequests": 2500,
+      "successfulRequests": 2500,
+      "failedRequests": 0,
+      "errorRatePercent": 0,
+      "latencyStats": {
+        "count": 2500,
+        "p50": 3366,
+        "p95": 6712,
+        "p99": 8724,
+        "min": 68,
+        "max": 9325,
+        "avg": 3235.22
+      },
+      "clusterLagDuringStep": 30152
+    }
+  ],
+  "summary": {
+    "totalRequests": 7750,
+    "successfulRequests": 7750,
+    "failedRequests": 0,
+    "overallErrorRatePercent": 0,
+    "maxSustainableObservedThroughputReqPerSec": 173.61,
+    "latencyDegradationPointReqPerSec": 25,
+    "errorInflectionPointReqPerSec": "None observed within range"
+  },
+  "outboxMetrics": {
+    "outboxPending": 0,
+    "outboxPublishedTotal": 7750,
+    "outboxFailedTotal": 0,
+    "drainedCleanly": false,
+    "drainTimeSeconds": 60.038
+  },
+  "kafkaMetrics": {
+    "finalTotalLag": 47634,
+    "groupLags": [
+      {
+        "group": "payment-service-group",
+        "lag": 0
+      },
+      {
+        "group": "inventory-service-group",
+        "lag": 0
+      },
+      {
+        "group": "fraud-service-group",
+        "lag": 0
+      },
+      {
+        "group": "shipping-service-group",
+        "lag": 0
+      },
+      {
+        "group": "notification-service-group",
+        "lag": 0
+      },
+      {
+        "group": "saga-orchestrator-group",
+        "lag": 10306
+      },
+      {
+        "group": "projection-read-model-group",
+        "lag": 37328
+      }
+    ],
+    "lagRecoveryTimeSec": 45.489
+  },
+  "e2eLatency": {
+    "fulfillmentLatency": {
+      "count": 209,
+      "p50": 23810,
+      "p95": 33435,
+      "p99": 33664,
+      "min": 11,
+      "max": 33695,
+      "avg": 24519.93
+    },
+    "stepLatencies": [
+      {
+        "step": "OrderCreated -> PaymentAuthorized",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "PaymentAuthorized -> InventoryReserved",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "InventoryReserved -> FraudApproved",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "FraudApproved -> ShipmentCreated",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      },
+      {
+        "step": "ShipmentCreated -> OrderCompleted",
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "avg": 0
+      }
+    ],
+    "totalOrdersSampled": 2075,
+    "totalCompletedOrders": 209
+  },
+  "sagaMetrics": {
+    "successfulSagas": {
+      "count": 0,
+      "stats": {
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "min": 0,
+        "max": 0,
+        "avg": 0
+      }
+    },
+    "compensatingSagas": {
+      "count": 0,
+      "stats": {
+        "count": 0,
+        "p50": 0,
+        "p95": 0,
+        "p99": 0,
+        "min": 0,
+        "max": 0,
+        "avg": 0
+      }
+    },
+    "failedSagas": 0,
+    "totalSagas": 1689
+  },
+  "dataIntegrity": {
+    "ordersCreated": 7750,
+    "ordersCompleted": 209,
+    "ordersCancelled": 41,
+    "eventStoreTotalEvents": 2556,
+    "lostEvents": 7541
+  }
+}
