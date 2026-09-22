@@ -1,0 +1,30 @@
+{
+  "scenario": "resilience-kafka-restart",
+  "timestamp": "2026-09-22T07:15:03.830Z",
+  "environment": {
+    "os": "Linux 7.0.0-31-generic (x64)",
+    "kernel": "7.0.0-31-generic",
+    "nodeVersion": "v20.20.2",
+    "dockerVersion": "Docker Engine 29.8.0 / Compose v5.5.1",
+    "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cpuCores": 8,
+    "totalMemoryGB": 7.58,
+    "freeMemoryGB": 2.55,
+    "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
+    "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
+    "kafkaPartitions": 3,
+    "replicationFactor": 1,
+    "maxDbConnections": 20
+  },
+  "failureInjected": "Docker container restart: confluentinc/cp-kafka:7.5.0",
+  "expectedBehavior": "Kafka broker restarts, KafkaJS producers/consumers reconnect automatically with exponential backoff, Transactional Outbox retries any interrupted publishes, zero lost events",
+  "observedBehavior": "Kafka recovered in 2.13s, consumers and outbox reconnected, cluster lag drained to 67066",
+  "kafkaRestartDurationSec": 2.13,
+  "totalRecoveryTimeSec": 38.067,
+  "ordersCreated": 40,
+  "ordersCompleted": 0,
+  "lostEvents": 40,
+  "finalClusterLag": 67066,
+  "outboxDrainedCleanly": true,
+  "status": "FAILED"
+}

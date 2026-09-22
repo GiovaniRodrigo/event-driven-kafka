@@ -1,0 +1,34 @@
+{
+  "commit": "41445c3",
+  "date": "2026-09-22T07:30:07.263Z",
+  "environment": {
+    "os": "Linux 7.0.0-31-generic (x64)",
+    "kernel": "7.0.0-31-generic",
+    "nodeVersion": "v20.20.2",
+    "dockerVersion": "Docker Engine 29.8.0 / Compose v5.5.1",
+    "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cpuCores": 8,
+    "totalMemoryGB": 7.58,
+    "freeMemoryGB": 1.83,
+    "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
+    "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
+    "kafkaPartitions": 3,
+    "replicationFactor": 1,
+    "maxDbConnections": 20
+  },
+  "throughput": {
+    "baselineReqPerSec": 10.03,
+    "normalReqPerSec": null,
+    "stressMaxSustainableReqPerSec": null
+  },
+  "latencyMs": {
+    "httpP50": 20,
+    "httpP95": 139,
+    "httpP99": 299
+  },
+  "errorRatePercent": 0,
+  "consumerLag": {
+    "baselineFinalLag": 56747
+  },
+  "recoveryTimeSec": {}
+}

@@ -1,0 +1,84 @@
+{
+  "scenario": "scenario-e2e-latency",
+  "timestamp": "2026-09-22T07:04:13.666Z",
+  "environment": {
+    "os": "Linux 7.0.0-31-generic (x64)",
+    "kernel": "7.0.0-31-generic",
+    "nodeVersion": "v20.20.2",
+    "dockerVersion": "Docker Engine 29.8.0 / Compose v5.5.1",
+    "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
+    "cpuCores": 8,
+    "totalMemoryGB": 7.58,
+    "freeMemoryGB": 2.79,
+    "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
+    "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
+    "kafkaPartitions": 3,
+    "replicationFactor": 1,
+    "maxDbConnections": 20
+  },
+  "httpIngestionLatency": {
+    "count": 200,
+    "p50": 35,
+    "p95": 739,
+    "p99": 984,
+    "min": 6,
+    "max": 1034,
+    "avg": 136.09
+  },
+  "endToEndFulfillmentLatency": {
+    "count": 34,
+    "p50": 7065,
+    "p95": 7407,
+    "p99": 7407,
+    "min": 313,
+    "max": 7407,
+    "avg": 4195.03
+  },
+  "stepLatencies": [
+    {
+      "step": "OrderCreated -> PaymentAuthorized",
+      "count": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "avg": 0
+    },
+    {
+      "step": "PaymentAuthorized -> InventoryReserved",
+      "count": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "avg": 0
+    },
+    {
+      "step": "InventoryReserved -> FraudApproved",
+      "count": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "avg": 0
+    },
+    {
+      "step": "FraudApproved -> ShipmentCreated",
+      "count": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "avg": 0
+    },
+    {
+      "step": "ShipmentCreated -> OrderCompleted",
+      "count": 0,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "avg": 0
+    }
+  ],
+  "summary": {
+    "totalOrdersSubmitted": 200,
+    "totalOrdersCompleted": 34,
+    "fulfillmentSuccessRatePercent": 17
+  }
+}
