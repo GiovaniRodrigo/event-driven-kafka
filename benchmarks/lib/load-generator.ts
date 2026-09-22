@@ -24,6 +24,7 @@ export interface LoadResult {
   actualDurationSeconds: number;
   actualThroughput: number;
   latencyStats: LatencyStats;
+  latencies: number[];
   statusCodes: { [code: number]: number };
   errorDetails: { [message: string]: number };
 }
@@ -126,6 +127,7 @@ export class LoadGenerator {
       actualDurationSeconds,
       actualThroughput,
       latencyStats,
+      latencies,
       statusCodes,
       errorDetails,
     };
@@ -152,6 +154,7 @@ export class LoadGenerator {
       });
 
       stepResults.push({ stepRate: step.targetRate, result: res });
+      allLatencies.push(...res.latencies);
       totalSent += res.totalRequests;
       totalSuccess += res.successfulRequests;
       totalFailed += res.failedRequests;

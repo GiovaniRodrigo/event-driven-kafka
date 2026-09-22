@@ -258,7 +258,6 @@ async function main() {
         JSON.stringify(baselineModel, null, 2),
         'utf8'
       );
-      ctx.saveBenchmarkResult('benchmark-baseline', baselineModel);
     }
 
     console.log('\n===============================================================');

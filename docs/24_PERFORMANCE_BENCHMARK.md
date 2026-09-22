@@ -9,6 +9,8 @@ All tests were executed on a dedicated benchmark environment with real PostgreSQ
 > [!NOTE]
 > All metrics and performance numbers in this report represent actual measurements observed in this single-node benchmark laboratory environment. They serve as reproducible baselines rather than theoretical capacity limits.
 
+![Performance & Resilience Profile](./assets/benchmark-summary.svg)
+
 ---
 
 ## 2. Benchmark Environment

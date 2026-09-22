@@ -1,6 +1,6 @@
 {
   "scenario": "scenario-outbox-benchmark",
-  "timestamp": "2026-09-22T07:04:45.076Z",
+  "timestamp": "2026-09-22T07:30:45.126Z",
   "environment": {
     "os": "Linux 7.0.0-31-generic (x64)",
     "kernel": "7.0.0-31-generic",
@@ -9,7 +9,7 @@
     "cpuModel": "Intel(R) Core(TM) i5-10210U CPU @ 1.60GHz",
     "cpuCores": 8,
     "totalMemoryGB": 7.58,
-    "freeMemoryGB": 2.8,
+    "freeMemoryGB": 1.88,
     "kafkaVersion": "Confluent Platform 7.5.0 (Apache Kafka 3.5.x)",
     "postgresVersion": "PostgreSQL 15.19 (Alpine Linux)",
     "kafkaPartitions": 3,
@@ -20,10 +20,10 @@
   "outboxEventsGenerated": 500,
   "outboxEventsPublished": 500,
   "outboxEventsFailed": 0,
-  "peakBacklog": 461,
+  "peakBacklog": 341,
   "finalBacklog": 0,
-  "drainTimeSeconds": 25.58,
-  "drainRateEventsPerSec": 19.55,
+  "drainTimeSeconds": 3.26,
+  "drainRateEventsPerSec": 153.37,
   "backlogConvergedToZero": true,
   "lostPublications": 0
 }
