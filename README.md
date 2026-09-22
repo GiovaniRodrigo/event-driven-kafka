@@ -19,17 +19,22 @@ flowchart TD
     Client["Client / Load Generator / k6"]
 
     subgraph TransportLayer["Transport & API Layer"]
+        direction TB
         HTTP["Express REST API\n- POST /orders\n- GET /orders/:id\n- GET /health & /ready\n- GET /metrics\n- POST /replay\n- GET /dlq\n- POST /chaos/*"]
         WS["Socket.IO Real-Time Gateway\n- order:created\n- order:updated\n- order:event\n- metrics:update"]
+        HTTP ~~~ WS
     end
 
     subgraph OrderContext["Order Bounded Context (Command Side)"]
+        direction TB
         OrderService["Order Service"]
         DB_Tx[("Postgres Transaction\n- orders\n- outbox_events")]
         OutboxRelay["Transactional Outbox Relay\n(FOR UPDATE SKIP LOCKED)"]
+        OrderService ~~~ DB_Tx ~~~ OutboxRelay
     end
 
     subgraph KafkaBroker["Apache Kafka Cluster (3 Partitions per Domain Topic)"]
+        direction TB
         T_Orders["orders.events"]
         T_Payments["payments.events"]
         T_Inventory["inventory.events"]
@@ -37,31 +42,48 @@ flowchart TD
         T_Shipping["shipping.events"]
         T_Notifications["notifications.events"]
         T_DLQ["platform.dlq"]
+        T_Orders ~~~ T_Payments ~~~ T_Inventory ~~~ T_Fraud ~~~ T_Shipping ~~~ T_Notifications ~~~ T_DLQ
     end
 
     subgraph SagaContext["Saga Orchestration Context"]
+        direction TB
         SagaOrchestrator["Order Fulfillment Saga Orchestrator"]
         SagaStore[("saga_instances (Persistent State)")]
+        SagaOrchestrator ~~~ SagaStore
     end
 
     subgraph DomainConsumers["Domain Consumers & Business Services"]
+        direction TB
         PaymentConsumer["Payment Consumer\n(payment-service-group)"]
         InventoryConsumer["Inventory Consumer\n(inventory-service-group)"]
         FraudConsumer["Fraud Consumer\n(fraud-service-group)"]
         ShippingConsumer["Shipping Consumer\n(shipping-service-group)"]
         NotificationConsumer["Notification Consumer\n(notification-service-group)"]
+        PaymentConsumer ~~~ InventoryConsumer ~~~ FraudConsumer ~~~ ShippingConsumer ~~~ NotificationConsumer
     end
 
     subgraph QuerySide["CQRS Query Side & Projections"]
+        direction TB
         ProjectionConsumer["Projection Consumer\n(projection-read-model-group)"]
         EventStore[("event_store (Immutable History)")]
         ReadModels[("Read Models:\n- order_read_model\n- payment_read_model\n- inventory_read_model\n- shipment_read_model")]
+        ProjectionConsumer ~~~ EventStore ~~~ ReadModels
     end
 
     subgraph OpsControls["Resilience, Replay & Chaos Controls"]
+        direction TB
         ChaosEngine["Chaos Engineering Engine\n(Fault Injection API)"]
         ReplayEngine["Event Replay Service\n(Projection Rebuild & DLQ Reprocessing)"]
+        ChaosEngine ~~~ ReplayEngine
     end
+
+    Client ~~~ HTTP
+    WS ~~~ OrderService
+    OutboxRelay ~~~ T_Orders
+    T_DLQ ~~~ SagaOrchestrator
+    SagaStore ~~~ PaymentConsumer
+    NotificationConsumer ~~~ ProjectionConsumer
+    ReadModels ~~~ ChaosEngine
 
     Client -->|POST /orders| HTTP
     HTTP --> OrderService
